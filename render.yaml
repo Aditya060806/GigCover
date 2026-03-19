@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: gigcover-ml-api
+    env: python
+    rootDir: ml-api
+    plan: free
+    buildCommand: python -m pip install --upgrade pip setuptools wheel && pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: WEATHER_SYNC_ENABLED
+        value: "true"
+      - key: WEATHER_SYNC_INTERVAL_SEC
+        value: "300"
+      - key: WEATHER_HTTP_TIMEOUT_SECONDS
+        value: "10"
+      - key: WEATHER_SOURCE_NAME
+        value: openweathermap
+      - key: WEATHER_ENABLE_TRIGGER_EVENT_WRITES
+        value: "true"
+      # Set these in Render dashboard (sensitive values):
+      # SUPABASE_URL
+      # SUPABASE_SERVICE_ROLE_KEY
+      # OPENWEATHER_API_KEY
+      # FRONTEND_ORIGINS (your Vercel app URL)

@@ -299,7 +299,7 @@ The worker-facing dashboard (`/dashboard`) is fully **mobile-responsive** — te
 cd web
 npm install
 cp .env.example .env.local
-# Add your Supabase URL + anon key to .env.local
+# Add your Supabase URL + anon key + NEXT_PUBLIC_ML_API_URL to .env.local
 npm run dev
 ```
 
@@ -366,6 +366,8 @@ ML API: `http://localhost:8000`
 | `/api/v1/triggers/check` | POST | Check sensor data against thresholds |
 | `/api/v1/triggers/simulate` | POST | Simulate trigger impact (workers + payout) |
 | `/api/v1/weather/current` | POST | Process weather data, fire alerts |
+| `/api/v1/ingestion/sync-now` | POST | Force weather sync for all zones/city/zone |
+| `/api/v1/ingestion/add-place` | POST | Add a place and ingest live weather immediately |
 | `/health` | GET | Service health check |
 
 **Example — Premium Calculation:**
@@ -387,6 +389,56 @@ curl -X POST http://localhost:8000/api/v1/risk/calculate-premium \
   ]
 }
 ```
+
+---
+
+## 🌐 Deployment (Vercel + Render)
+
+### 1. Deploy Backend to Render
+
+This repo includes `render.yaml` at the root for the ML API service.
+
+1. Push this repo to GitHub
+2. In Render: **New +** → **Blueprint** → select this repo
+3. Render will detect `render.yaml` and create `gigcover-ml-api`
+4. In Render service env vars, set:
+  - `SUPABASE_URL`
+  - `SUPABASE_SERVICE_ROLE_KEY`
+  - `OPENWEATHER_API_KEY`
+  - `FRONTEND_ORIGINS` = your Vercel URL (example: `https://gigcover.vercel.app`)
+  - `PYTHON_VERSION` = `3.11.9`
+5. Deploy and copy your Render backend URL (example: `https://gigcover-ml-api.onrender.com`)
+
+Render manual service settings (if not using Blueprint):
+
+- Root Directory: `ml-api`
+- Build Command: `python -m pip install --upgrade pip setuptools wheel && pip install -r requirements.txt`
+- Start Command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+
+If Render shows `pydantic-core` metadata/maturin errors with Python 3.14, force runtime to `3.11.9` and redeploy with **Clear build cache & deploy**.
+
+### 2. Deploy Frontend to Vercel
+
+1. In Vercel: **Add New Project** → import this repo
+2. Set **Root Directory** to `web`
+3. Add frontend env vars in Vercel project settings:
+  - `NEXT_PUBLIC_SUPABASE_URL`
+  - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+  - `NEXT_PUBLIC_ML_API_URL` = your Render backend URL
+  - Optional map keys:
+    - `NEXT_PUBLIC_OPENWEATHER_API_KEY`
+    - `NEXT_PUBLIC_AQICN_API_KEY`
+    - `NEXT_PUBLIC_TOMTOM_API_KEY`
+4. Deploy
+
+### 3. Connection Checklist
+
+After both deployments:
+
+1. Open Render URL `/health` and confirm `status: healthy`
+2. From Vercel app, perform a premium call at `/insure`
+3. Confirm browser network requests go to `NEXT_PUBLIC_ML_API_URL`
+4. If blocked by CORS, update `FRONTEND_ORIGINS` in Render to exact Vercel domain and redeploy
 
 ---
 

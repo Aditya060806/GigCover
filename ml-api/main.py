@@ -25,10 +25,21 @@ app = FastAPI(
     version="3.0.0",
 )
 
+
+def _parse_cors_origins() -> List[str]:
+    raw = os.getenv("FRONTEND_ORIGINS", "")
+    origins = [item.strip() for item in raw.split(",") if item.strip()]
+    if origins:
+        return origins
+    return ["http://localhost:3000"]
+
+
+_cors_origins = _parse_cors_origins()
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1077,4 +1088,4 @@ def get_weather(req: WeatherData, persist_to_supabase: bool = True):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=True)
