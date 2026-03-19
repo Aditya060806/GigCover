@@ -412,10 +412,12 @@ This repo includes `render.yaml` at the root for the ML API service.
 Render manual service settings (if not using Blueprint):
 
 - Root Directory: `ml-api`
-- Build Command: `python -m pip install --upgrade pip setuptools wheel && pip install -r requirements.txt`
+- Build Command: `python -V && python -c "import sys; assert sys.version_info[:2] == (3, 11), f'Render must use Python 3.11.x, got {sys.version}'" && python -m pip install --upgrade pip setuptools wheel && pip install -r requirements.txt`
 - Start Command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
 
 If Render shows `pydantic-core` metadata/maturin errors with Python 3.14, force runtime to `3.11.9` and redeploy with **Clear build cache & deploy**.
+
+If logs show source tarballs like `numpy-1.26.4.tar.gz` or `pydantic_core-*.tar.gz`, Render is still not on Python 3.11. Ensure runtime is pinned and verify the first build log line prints `Python 3.11.x`.
 
 ### 2. Deploy Frontend to Vercel
 

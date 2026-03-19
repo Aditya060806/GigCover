@@ -4,7 +4,7 @@ services:
     env: python
     rootDir: ml-api
     plan: free
-    buildCommand: python -m pip install --upgrade pip setuptools wheel && pip install -r requirements.txt
+    buildCommand: python -V && python -c "import sys; assert sys.version_info[:2] == (3, 11), f'Render must use Python 3.11.x, got {sys.version}'" && python -m pip install --upgrade pip setuptools wheel && pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
