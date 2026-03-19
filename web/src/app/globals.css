@@ -1,0 +1,123 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 166 72% 28%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 166 84% 16%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 166 72% 28%;
+    --radius: 0.625rem;
+    --chart-1: 166 72% 28%;
+    --chart-2: 215 20% 65%;
+    --chart-3: 43 96% 56%;
+    --chart-4: 172 66% 50%;
+    --chart-5: 0 84% 60%;
+    --success: 152 69% 31%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+  h1, h2, h3, h4, h5, h6 {
+    @apply tracking-tight text-foreground;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  .section-container {
+    @apply max-w-7xl mx-auto px-4 sm:px-6 lg:px-8;
+  }
+  .section-padding {
+    @apply py-16 md:py-24;
+  }
+  .gradient-teal {
+    @apply bg-gradient-to-r from-teal-600 to-emerald-600;
+  }
+  .gradient-teal-subtle {
+    @apply bg-gradient-to-br from-teal-50 to-emerald-50;
+  }
+  .grid-pattern {
+    background-image:
+      linear-gradient(to right, hsl(214 32% 91% / 0.5) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(214 32% 91% / 0.5) 1px, transparent 1px);
+    background-size: 64px 64px;
+  }
+  .card-elevated {
+    @apply bg-white rounded-xl border border-slate-200 shadow-sm;
+  }
+  .card-hover {
+    @apply transition-all duration-200 hover:shadow-md hover:border-slate-300;
+  }
+  .badge-pill {
+    @apply inline-flex items-center rounded-full px-3 py-1 text-xs font-medium;
+  }
+}
+
+/* Smooth scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: hsl(210 40% 98%);
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(215 20% 82%);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(215 20% 65%);
+}
+
+/* Leaflet light theme */
+.leaflet-container {
+  background: hsl(210 40% 98%) !important;
+  border-radius: 0.625rem;
+}
+.leaflet-popup-content-wrapper {
+  background: white !important;
+  color: hsl(222 47% 11%) !important;
+  border: 1px solid hsl(214 32% 91%);
+  border-radius: 0.625rem !important;
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.07), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+}
+.leaflet-popup-tip {
+  background: white !important;
+}
+
+/* Code block styling */
+.code-block {
+  @apply bg-slate-900 text-slate-100 rounded-lg p-4 font-mono text-sm overflow-x-auto;
+}
+.code-block .keyword { color: #c084fc; }
+.code-block .string { color: #34d399; }
+.code-block .number { color: #fbbf24; }
+.code-block .comment { color: #64748b; }

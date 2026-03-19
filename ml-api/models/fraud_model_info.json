@@ -1,0 +1,95 @@
+{
+  "type": "ensemble_xgb_isoforest",
+  "version": "3.0",
+  "features": [
+    "claim_amount",
+    "auto_triggered",
+    "trigger_encoded",
+    "claim_hour",
+    "days_since_last_claim",
+    "rainfall_mm",
+    "temp_c",
+    "aqi",
+    "wind_speed_kmh",
+    "gps_deviation_km",
+    "timing_anomaly",
+    "amount_anomaly",
+    "platform_active",
+    "weather_matches",
+    "is_night_claim"
+  ],
+  "n_features": 15,
+  "n_samples_train": 6400,
+  "n_samples_test": 1600,
+  "fraud_rate": 0.05225,
+  "class_balance": {
+    "legit": 7582,
+    "fraud": 418
+  },
+  "best_clf_params": {
+    "n_estimators": 400,
+    "max_depth": 5,
+    "learning_rate": 0.05,
+    "min_child_weight": 3
+  },
+  "ensemble_weights": {
+    "xgb_classifier": 0.7,
+    "isolation_forest": 0.3
+  },
+  "metrics": {
+    "xgb_auc_roc": 1.0,
+    "xgb_pr_auc": 1.0,
+    "xgb_precision": 1.0,
+    "xgb_recall": 1.0,
+    "xgb_f1": 1.0,
+    "isoforest_auc_roc": 0.9991754617414248,
+    "ensemble_auc_roc": 1.0,
+    "cv_auc_mean": 1.0,
+    "cv_auc_std": 0.0
+  },
+  "confusion_matrix": [
+    [
+      1516,
+      0
+    ],
+    [
+      0,
+      84
+    ]
+  ],
+  "feature_importance_gain": {
+    "claim_amount": 0.0037923988420516253,
+    "auto_triggered": 0.0,
+    "trigger_encoded": 0.0,
+    "claim_hour": 1.4104183719609864e-05,
+    "days_since_last_claim": 0.4466606676578522,
+    "rainfall_mm": 0.00020339452021289617,
+    "temp_c": 3.5137836675858125e-05,
+    "aqi": 0.005058595910668373,
+    "wind_speed_kmh": 0.0,
+    "gps_deviation_km": 0.09240414947271347,
+    "timing_anomaly": 0.10383746027946472,
+    "amount_anomaly": 0.13532209396362305,
+    "platform_active": 0.09615907073020935,
+    "weather_matches": 0.11651282757520676,
+    "is_night_claim": 0.0
+  },
+  "feature_importance_shap": {
+    "claim_amount": 0.37962380051612854,
+    "auto_triggered": 0.0,
+    "trigger_encoded": 0.0,
+    "claim_hour": 0.0019976019393652678,
+    "days_since_last_claim": 4.146660327911377,
+    "rainfall_mm": 0.005856149364262819,
+    "temp_c": 0.023067105561494827,
+    "aqi": 0.03346295654773712,
+    "wind_speed_kmh": 0.0,
+    "gps_deviation_km": 1.8651459217071533,
+    "timing_anomaly": 0.9228789806365967,
+    "amount_anomaly": 0.6743254661560059,
+    "platform_active": 0.331628680229187,
+    "weather_matches": 0.8441330194473267,
+    "is_night_claim": 0.0
+  },
+  "trained_at": "2026-03-05T14:41:37"
+}
