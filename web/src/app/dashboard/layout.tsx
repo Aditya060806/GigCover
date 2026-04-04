@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Shield,
@@ -14,11 +15,16 @@ import {
   Menu,
   X,
   ShieldCheck,
+  RotateCw,
+  Loader2,
+  Clock3,
+  Activity,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { useState } from "react";
+import { supabase } from "@/lib/supabase";
+import type { GigWorker, WeatherEvent } from "@/types/database";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -35,6 +41,130 @@ export default function DashboardLayout({
 }) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [workerName, setWorkerName] = useState("Ravi Patel");
+  const [workerInitials, setWorkerInitials] = useState("RP");
+  const [workerPlatform, setWorkerPlatform] = useState("Swiggy");
+  const [workerCity, setWorkerCity] = useState("Mumbai");
+  const [workerPlan, setWorkerPlan] = useState("Standard");
+  const [pendingClaims, setPendingClaims] = useState(0);
+  const [weatherLabel, setWeatherLabel] = useState("Monitoring Active");
+  const [weatherSeverity, setWeatherSeverity] = useState<"safe" | "moderate" | "warning">("safe");
+  const [syncing, setSyncing] = useState(false);
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  const realtimeRefreshTimerRef = useRef<number | null>(null);
+
+  const loadShellData = useCallback(async (showSpinner = false) => {
+    if (showSpinner) setSyncing(true);
+    try {
+      const { data: workers } = await supabase
+        .from("gig_workers")
+        .select("id, name, platform, city, zone, plan")
+        .eq("status", "active")
+        .limit(1)
+        .returns<Pick<GigWorker, "id" | "name" | "platform" | "city" | "zone" | "plan">[]>();
+
+      const worker = workers?.[0];
+      if (!worker) return;
+
+      setWorkerName(worker.name);
+      setWorkerPlatform(worker.platform);
+      setWorkerCity(worker.city);
+      setWorkerPlan(worker.plan.charAt(0).toUpperCase() + worker.plan.slice(1));
+      setWorkerInitials(
+        worker.name
+          .split(" ")
+          .slice(0, 2)
+          .map((part) => part.charAt(0).toUpperCase())
+          .join("")
+      );
+
+      const [claimsResult, weatherResult] = await Promise.all([
+        supabase
+          .from("claims")
+          .select("id", { head: true, count: "exact" })
+          .eq("worker_id", worker.id)
+          .in("status", ["processing", "flagged"]),
+        supabase
+          .from("weather_events")
+          .select("rainfall_mm, aqi, temp_c")
+          .eq("city", worker.city)
+          .eq("zone", worker.zone)
+          .order("recorded_at", { ascending: false })
+          .limit(1)
+          .returns<Pick<WeatherEvent, "rainfall_mm" | "aqi" | "temp_c">[]>(),
+      ]);
+
+      setPendingClaims(claimsResult.count ?? 0);
+
+      const weather = weatherResult.data?.[0];
+      if (weather) {
+        const warning = weather.rainfall_mm > 30 || weather.aqi > 300 || weather.temp_c > 42;
+        const moderate = weather.rainfall_mm > 15 || weather.aqi > 200 || weather.temp_c > 38;
+        if (warning) {
+          setWeatherSeverity("warning");
+          setWeatherLabel("Elevated Risk");
+        } else if (moderate) {
+          setWeatherSeverity("moderate");
+          setWeatherLabel("Watch Conditions");
+        } else {
+          setWeatherSeverity("safe");
+          setWeatherLabel("Monitoring Active");
+        }
+      }
+
+      setLastSyncAt(new Date().toISOString());
+    } finally {
+      if (showSpinner) setSyncing(false);
+    }
+  }, []);
+
+  const scheduleRealtimeRefresh = useCallback(() => {
+    if (realtimeRefreshTimerRef.current !== null) {
+      window.clearTimeout(realtimeRefreshTimerRef.current);
+    }
+    realtimeRefreshTimerRef.current = window.setTimeout(() => {
+      realtimeRefreshTimerRef.current = null;
+      void loadShellData();
+    }, 600);
+  }, [loadShellData]);
+
+  useEffect(() => {
+    void loadShellData();
+    const intervalId = window.setInterval(() => {
+      void loadShellData();
+    }, 30000);
+
+    return () => window.clearInterval(intervalId);
+  }, [loadShellData]);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel("dashboard-shell-layout-live")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "claims" },
+        scheduleRealtimeRefresh
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "weather_events" },
+        scheduleRealtimeRefresh
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "gig_workers" },
+        scheduleRealtimeRefresh
+      )
+      .subscribe();
+
+    return () => {
+      if (realtimeRefreshTimerRef.current !== null) {
+        window.clearTimeout(realtimeRefreshTimerRef.current);
+        realtimeRefreshTimerRef.current = null;
+      }
+      void supabase.removeChannel(channel);
+    };
+  }, [scheduleRealtimeRefresh]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50">
@@ -74,11 +204,11 @@ export default function DashboardLayout({
           <div className="rounded-xl bg-slate-50 border border-slate-100 p-3">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-teal-100 flex items-center justify-center text-teal-700 font-bold text-sm">
-                RP
+                {workerInitials}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-foreground truncate">Ravi Patel</p>
-                <p className="text-xs text-muted-foreground">Swiggy &bull; Mumbai</p>
+                <p className="text-sm font-medium text-foreground truncate">{workerName}</p>
+                <p className="text-xs text-muted-foreground">{workerPlatform} &bull; {workerCity}</p>
               </div>
             </div>
             <div className="mt-3 flex items-center justify-between">
@@ -86,7 +216,28 @@ export default function DashboardLayout({
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1" />
                 Active Policy
               </Badge>
-              <span className="text-xs text-muted-foreground">Standard</span>
+              <span className="text-xs text-muted-foreground">{workerPlan}</span>
+            </div>
+          </div>
+          <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">Open Claims</span>
+              <span className="font-semibold text-slate-900">{pendingClaims}</span>
+            </div>
+            <div className="flex items-center justify-between text-xs mt-2">
+              <span className="text-muted-foreground">Weather Posture</span>
+              <span
+                className={cn(
+                  "font-semibold",
+                  weatherSeverity === "warning"
+                    ? "text-amber-700"
+                    : weatherSeverity === "moderate"
+                    ? "text-sky-700"
+                    : "text-emerald-700"
+                )}
+              >
+                {weatherLabel}
+              </span>
             </div>
           </div>
         </div>
@@ -113,9 +264,9 @@ export default function DashboardLayout({
                 >
                   <item.icon className="w-[18px] h-[18px]" />
                   <span>{item.label}</span>
-                  {item.label === "Claims" && (
+                  {item.label === "Claims" && pendingClaims > 0 && (
                     <Badge className="ml-auto text-[10px] px-1.5" variant="default">
-                      3
+                      {pendingClaims}
                     </Badge>
                   )}
                 </div>
@@ -166,11 +317,49 @@ export default function DashboardLayout({
           <div className="flex items-center gap-3">
             {/* Live weather indicator */}
             <div className="hidden sm:flex items-center gap-2 bg-slate-50 border border-slate-100 rounded-full px-3 py-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span
+                className={cn(
+                  "w-2 h-2 rounded-full animate-pulse",
+                  weatherSeverity === "warning"
+                    ? "bg-amber-500"
+                    : weatherSeverity === "moderate"
+                    ? "bg-sky-500"
+                    : "bg-emerald-500"
+                )}
+              />
               <span className="text-xs text-muted-foreground">
-                Monitoring Active
+                {weatherLabel}
               </span>
             </div>
+
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 px-2 text-xs gap-1"
+              onClick={() => {
+                void loadShellData(true);
+              }}
+              disabled={syncing}
+            >
+              {syncing ? (
+                <>
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  Sync
+                </>
+              ) : (
+                <>
+                  <RotateCw className="w-3 h-3" />
+                  Refresh
+                </>
+              )}
+            </Button>
+
+            {lastSyncAt && (
+              <Badge variant="secondary" className="hidden md:inline-flex text-[10px] gap-1">
+                <Clock3 className="w-3 h-3" />
+                {new Date(lastSyncAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+              </Badge>
+            )}
 
             <Button variant="ghost" size="icon" className="relative">
               <Bell className="w-[18px] h-[18px]" />
@@ -178,12 +367,18 @@ export default function DashboardLayout({
                 2
               </span>
             </Button>
+
+            <Badge variant="outline" className="hidden xl:inline-flex gap-1">
+              <Activity className="w-3 h-3" />
+              Live Shell
+            </Badge>
           </div>
         </header>
 
         {/* Page content */}
         <main className="flex-1 overflow-y-auto p-4 lg:p-6">
           <motion.div
+            className="motion-shell"
             key={pathname}
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}

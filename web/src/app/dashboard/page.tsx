@@ -111,6 +111,9 @@ const earningsData = [
   { day: "Sun", actual: 750, protected: 800 },
 ];
 
+const CHART_DURATION_FAST = 560;
+const CHART_DURATION_MEDIUM = 700;
+
 const statusColors: Record<string, string> = {
   paid: "success",
   processing: "warning",
@@ -528,6 +531,10 @@ export default function DashboardPage() {
                       fill="url(#protectedGrad)"
                       strokeWidth={2}
                       name="Protected"
+                      isAnimationActive={chartsReady}
+                      animationBegin={0}
+                      animationDuration={CHART_DURATION_FAST}
+                      animationEasing="ease-out"
                     />
                     <Area
                       type="monotone"
@@ -536,6 +543,10 @@ export default function DashboardPage() {
                       fill="url(#actualGrad)"
                       strokeWidth={2}
                       name="Actual"
+                      isAnimationActive={chartsReady}
+                      animationBegin={80}
+                      animationDuration={CHART_DURATION_MEDIUM}
+                      animationEasing="ease-out"
                     />
                   </AreaChart>
                 </ResponsiveContainer>

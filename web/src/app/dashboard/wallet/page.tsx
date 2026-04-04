@@ -56,6 +56,9 @@ const FALLBACK_TRANSACTIONS = [
   { id: "demo-10", type: "bonus", amount: 500, description: "Welcome Bonus — First Policy", date: "Feb 1, 10:00 AM", ref: "BON-001", createdAt: "2026-02-01T10:00:00", status: "completed" },
 ];
 
+const CHART_DURATION_FAST = 560;
+const CHART_DURATION_MEDIUM = 820;
+
 type WalletTransaction = {
   id: string;
   type: string;
@@ -153,6 +156,7 @@ export default function WalletPage() {
   const [chartsReady, setChartsReady] = useState(false);
   const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>(FALLBACK_TRANSACTIONS);
   const [workerContext, setWorkerContext] = useState<WorkerContext | null>(null);
+  const [hasLiveLedger, setHasLiveLedger] = useState(false);
   const [loading, setLoading] = useState(true);
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
@@ -160,15 +164,18 @@ export default function WalletPage() {
 
   const loadWalletData = useCallback(async () => {
     try {
-      const { data: worker } = await supabase
+      const { data: worker, error: workerError } = await supabase
         .from("gig_workers")
         .select("id, name, plan, weekly_premium, max_payout, total_earnings, total_payouts")
         .eq("status", "active")
         .limit(1)
-        .single();
+        .maybeSingle();
 
-      if (!worker) {
-        setLoading(false);
+      if (workerError || !worker) {
+        setWorkerContext(null);
+        setWalletTransactions(FALLBACK_TRANSACTIONS);
+        setHasLiveLedger(false);
+        setLastSyncAt(new Date().toISOString());
         return;
       }
 
@@ -198,9 +205,13 @@ export default function WalletPage() {
         // Ignore malformed local payment cache.
       }
 
-      if (mapped.length > 0) {
-        setWalletTransactions(mapped);
-      }
+      setWalletTransactions(mapped);
+      setHasLiveLedger(true);
+      setLastSyncAt(new Date().toISOString());
+    } catch {
+      setWorkerContext(null);
+      setWalletTransactions(FALLBACK_TRANSACTIONS);
+      setHasLiveLedger(false);
       setLastSyncAt(new Date().toISOString());
     } finally {
       setLoading(false);
@@ -308,7 +319,9 @@ export default function WalletPage() {
       (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
     );
 
-    if (ordered.length === 0) return FALLBACK_BALANCE_HISTORY;
+    if (ordered.length === 0) {
+      return hasLiveLedger ? [] : FALLBACK_BALANCE_HISTORY;
+    }
 
     let running = 0;
     const points = ordered.map((tx) => {
@@ -323,7 +336,7 @@ export default function WalletPage() {
     });
 
     return points.slice(-12);
-  }, [walletTransactions]);
+  }, [walletTransactions, hasLiveLedger]);
 
   const workerName = workerContext?.name ?? "Ravi Patel";
   const upiId = `${workerName.toLowerCase().replace(/\s+/g, ".")}@upi`;
@@ -332,11 +345,19 @@ export default function WalletPage() {
     day: "numeric",
   });
 
-  const walletPulse = [
-    `${walletTransactions.length.toLocaleString("en-IN")} ledger events processed with ${payoutCount} payouts and ${premiumCount} premium debits recorded.`,
-    `${formatCurrency(totalIncome)} credited and ${formatCurrency(totalSpent)} debited across the current wallet history.`,
-    `Thirty-day net flow is ${formatCurrency(monthlyNet)} with live sync ${lastSyncAt ? "active" : "pending"}.`,
-  ];
+  const walletPulse = hasLiveLedger
+    ? [
+        walletTransactions.length > 0
+          ? `${walletTransactions.length.toLocaleString("en-IN")} ledger events processed with ${payoutCount} payouts and ${premiumCount} premium debits recorded.`
+          : "No ledger events in the current live window. New payouts and premium debits will appear here in real time.",
+        `${formatCurrency(totalIncome)} credited and ${formatCurrency(totalSpent)} debited across the current wallet history.`,
+        `Thirty-day net flow is ${formatCurrency(monthlyNet)} with live sync ${lastSyncAt ? "active" : "pending"}.`,
+      ]
+    : [
+        "Displaying demo fallback ledger because live wallet data is currently unavailable.",
+        `${formatCurrency(totalIncome)} credited and ${formatCurrency(totalSpent)} debited across sample treasury activity.`,
+        `Thirty-day sample net flow is ${formatCurrency(monthlyNet)} while backend sync reconnects.`,
+      ];
 
   return (
     <div className="space-y-6">
@@ -369,9 +390,9 @@ export default function WalletPage() {
               </>
             )}
           </Button>
-          <Badge variant="outline" className="gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            Live Ledger
+          <Badge variant={hasLiveLedger ? "success" : "warning"} className="gap-1.5">
+            <span className={`w-2 h-2 rounded-full ${hasLiveLedger ? "bg-emerald-500 animate-pulse" : "bg-amber-500"}`} />
+            {hasLiveLedger ? "Live backend" : "Demo fallback"}
           </Badge>
           {lastSyncAt && (
             <Badge variant="secondary" className="text-[10px] gap-1">
@@ -494,7 +515,8 @@ export default function WalletPage() {
             <div className="h-[250px]">
               {loading ? (
                 <div className="h-full w-full rounded-lg bg-slate-100 animate-pulse" />
-              ) : chartsReady ? (
+              ) : balanceHistory.length > 0 ? (
+                chartsReady ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={balanceHistory}>
                     <defs>
@@ -516,11 +538,27 @@ export default function WalletPage() {
                       }}
                       formatter={(value: number | undefined) => [`₹${value ?? 0}`, "Balance"]}
                     />
-                    <Area type="monotone" dataKey="balance" stroke="#0d9488" fill="url(#balGrad)" strokeWidth={2} />
+                    <Area
+                      type="monotone"
+                      dataKey="balance"
+                      stroke="#0d9488"
+                      fill="url(#balGrad)"
+                      strokeWidth={2}
+                      isAnimationActive={chartsReady}
+                      animationBegin={CHART_DURATION_FAST / 6}
+                      animationDuration={CHART_DURATION_MEDIUM}
+                      animationEasing="ease-out"
+                    />
                   </AreaChart>
                 </ResponsiveContainer>
+                ) : (
+                  <div className="h-full w-full rounded-lg bg-slate-100" />
+                )
               ) : (
-                <div className="h-full w-full rounded-lg bg-slate-100" />
+                <div className="flex h-full w-full flex-col items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 px-6 text-center">
+                  <p className="text-sm font-medium text-slate-800">No live balance movement yet</p>
+                  <p className="mt-1 text-xs text-muted-foreground">This chart will populate after the first payout or premium debit posts.</p>
+                </div>
               )}
             </div>
           </CardContent>
@@ -573,49 +611,56 @@ export default function WalletPage() {
           <CardTitle className="text-base">Transaction History</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
-          {sortedTransactions.map((tx) => (
-            <div
-              key={tx.id}
-              className="flex items-center gap-4 p-3 rounded-lg bg-slate-50 border border-slate-100 hover:bg-slate-100 transition-colors"
-            >
+          {sortedTransactions.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center">
+              <p className="text-sm font-medium text-slate-800">No transactions to display</p>
+              <p className="mt-1 text-xs text-muted-foreground">As soon as your next payout or premium posts, it will appear in this ledger.</p>
+            </div>
+          ) : (
+            sortedTransactions.map((tx) => (
               <div
-                className={`w-9 h-9 rounded-lg flex items-center justify-center ${
-                  tx.amount > 0
-                    ? "bg-emerald-50"
-                    : "bg-red-50"
-                }`}
+                key={tx.id}
+                className="flex items-center gap-4 p-3 rounded-lg bg-slate-50 border border-slate-100 hover:bg-slate-100 transition-colors"
               >
-                {tx.amount > 0 ? (
-                  <ArrowDownLeft className="w-4 h-4 text-emerald-600" />
-                ) : (
-                  <ArrowUpRight className="w-4 h-4 text-red-600" />
-                )}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">{tx.description}</p>
-                <p className="text-xs text-muted-foreground">
-                  {tx.ref} • {tx.date}
-                </p>
-              </div>
-              <div className="text-right shrink-0">
-                <span
-                  className={`text-sm font-semibold ${
-                    tx.amount > 0 ? "text-emerald-600" : "text-red-600"
+                <div
+                  className={`w-9 h-9 rounded-lg flex items-center justify-center ${
+                    tx.amount > 0
+                      ? "bg-emerald-50"
+                      : "bg-red-50"
                   }`}
                 >
-                  {tx.amount > 0 ? "+" : ""}{formatCurrency(Math.abs(tx.amount))}
-                </span>
-                <div className="mt-1">
-                  <Badge
-                    variant={tx.amount > 0 ? "success" : "secondary"}
-                    className="text-[10px] capitalize"
+                  {tx.amount > 0 ? (
+                    <ArrowDownLeft className="w-4 h-4 text-emerald-600" />
+                  ) : (
+                    <ArrowUpRight className="w-4 h-4 text-red-600" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{tx.description}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {tx.ref} • {tx.date}
+                  </p>
+                </div>
+                <div className="text-right shrink-0">
+                  <span
+                    className={`text-sm font-semibold ${
+                      tx.amount > 0 ? "text-emerald-600" : "text-red-600"
+                    }`}
                   >
-                    {prettifyType(tx.type)}
-                  </Badge>
+                    {tx.amount > 0 ? "+" : ""}{formatCurrency(Math.abs(tx.amount))}
+                  </span>
+                  <div className="mt-1">
+                    <Badge
+                      variant={tx.amount > 0 ? "success" : "secondary"}
+                      className="text-[10px] capitalize"
+                    >
+                      {prettifyType(tx.type)}
+                    </Badge>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            ))
+          )}
         </CardContent>
       </Card>
     </div>

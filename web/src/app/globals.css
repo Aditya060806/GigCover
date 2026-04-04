@@ -97,6 +97,85 @@
   background: hsl(215 20% 65%);
 }
 
+/* Shared page reveal choreography for admin/worker shells */
+@keyframes page-reveal-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.motion-shell > .space-y-6 > *,
+.motion-shell > .space-y-4 > *,
+.motion-shell > .space-y-8 > * {
+  opacity: 0;
+  animation: page-reveal-up 0.42s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.motion-shell > .space-y-6 > *:nth-child(1),
+.motion-shell > .space-y-4 > *:nth-child(1),
+.motion-shell > .space-y-8 > *:nth-child(1) {
+  animation-delay: 40ms;
+}
+
+.motion-shell > .space-y-6 > *:nth-child(2),
+.motion-shell > .space-y-4 > *:nth-child(2),
+.motion-shell > .space-y-8 > *:nth-child(2) {
+  animation-delay: 90ms;
+}
+
+.motion-shell > .space-y-6 > *:nth-child(3),
+.motion-shell > .space-y-4 > *:nth-child(3),
+.motion-shell > .space-y-8 > *:nth-child(3) {
+  animation-delay: 140ms;
+}
+
+.motion-shell > .space-y-6 > *:nth-child(4),
+.motion-shell > .space-y-4 > *:nth-child(4),
+.motion-shell > .space-y-8 > *:nth-child(4) {
+  animation-delay: 190ms;
+}
+
+.motion-shell > .space-y-6 > *:nth-child(n + 5),
+.motion-shell > .space-y-4 > *:nth-child(n + 5),
+.motion-shell > .space-y-8 > *:nth-child(n + 5) {
+  animation-delay: 240ms;
+}
+
+.motion-shell .card-surface {
+  transition:
+    box-shadow 220ms ease,
+    border-color 220ms ease,
+    transform 220ms ease;
+}
+
+@media (hover: hover) {
+  .motion-shell .card-surface:hover {
+    border-color: hsl(214 32% 83%);
+    box-shadow: 0 10px 24px -18px rgb(15 23 42 / 0.35);
+    transform: translateY(-1px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .motion-shell > .space-y-6 > *,
+  .motion-shell > .space-y-4 > *,
+  .motion-shell > .space-y-8 > * {
+    opacity: 1;
+    animation: none;
+    transform: none;
+  }
+
+  .motion-shell .card-surface {
+    transition: none;
+    transform: none;
+  }
+}
+
 /* Leaflet light theme */
 .leaflet-container {
   background: hsl(210 40% 98%) !important;

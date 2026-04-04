@@ -68,6 +68,10 @@ const radarData = [
   { metric: "User Retention", value: 90 },
 ];
 
+const CHART_DURATION_FAST = 580;
+const CHART_DURATION_MEDIUM = 700;
+const CHART_DURATION_SLOW = 820;
+
 const platformBreakdown = [
   { platform: "Swiggy", workers: 4200, share: 27.5, color: "#f97316" },
   { platform: "Zomato", workers: 3800, share: 24.9, color: "#ef4444" },
@@ -295,9 +299,11 @@ export default function AdminAnalytics() {
       ]
     : fallbackKpis;
 
+  const hasLiveOps = Boolean(opsKpis);
+
   const incidentTrend =
-    opsKpis && opsKpis.incident_series.length > 0
-      ? opsKpis.incident_series.map((point) => ({
+    hasLiveOps
+      ? (opsKpis?.incident_series ?? []).map((point) => ({
           day: new Date(point.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }),
           fire: point.fire,
           simulate: point.simulate,
@@ -306,8 +312,8 @@ export default function AdminAnalytics() {
       : fallbackIncidentTrend;
 
   const cityRows =
-    opsKpis && opsKpis.city_snapshot.length > 0
-      ? opsKpis.city_snapshot
+    hasLiveOps
+      ? (opsKpis?.city_snapshot ?? [])
       : fallbackCitySnapshot;
 
   const performanceRadar = opsKpis
@@ -343,14 +349,16 @@ export default function AdminAnalytics() {
     : radarData;
 
   const appealTrend =
-    opsKpis && opsKpis.appeal_series.length > 0
+    hasLiveOps
       ? (() => {
-          const totalDelta = opsKpis.appeal_series.reduce(
+          const appealSeries = opsKpis?.appeal_series ?? [];
+          if (appealSeries.length === 0) return [];
+          const totalDelta = appealSeries.reduce(
             (sum, point) => sum + point.submitted - point.resolved,
             0
           );
-          let backlog = Math.max(0, opsKpis.headline.open_appeals - totalDelta);
-          return opsKpis.appeal_series.map((point) => {
+          let backlog = Math.max(0, (opsKpis?.headline.open_appeals ?? 0) - totalDelta);
+          return appealSeries.map((point) => {
             backlog = Math.max(0, backlog + point.submitted - point.resolved);
             return {
               day: new Date(point.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }),
@@ -363,8 +371,8 @@ export default function AdminAnalytics() {
       : fallbackAppealTrend;
 
   const platformRows =
-    opsKpis && opsKpis.platform_snapshot.length > 0
-      ? opsKpis.platform_snapshot.map((item) => ({
+    hasLiveOps
+      ? (opsKpis?.platform_snapshot ?? []).map((item) => ({
           ...item,
           color: platformColorMap[item.platform] ?? "#0ea5e9",
         }))
@@ -379,7 +387,10 @@ export default function AdminAnalytics() {
     "Workers Protected (24h)": incidentTrend.map((point) => point.fire * 40 + point.simulate * 20),
   };
 
-  const fallbackSparkline = incidentTrend.map((point) => point.fire + point.simulate);
+  const fallbackSparkline =
+    incidentTrend.length > 0
+      ? incidentTrend.map((point) => point.fire + point.simulate)
+      : [0, 1, 0, 1];
 
   const kpiCards = liveKpis.map((kpi) => ({
     ...kpi,
@@ -452,6 +463,9 @@ export default function AdminAnalytics() {
           <Badge variant="secondary" className="text-xs gap-1.5">
             <Calendar className="w-3 h-3" />
             {windowDays} day window
+          </Badge>
+          <Badge variant={hasLiveOps ? "success" : "warning"} className="text-xs">
+            {hasLiveOps ? "Live backend" : "Demo fallback"}
           </Badge>
           {lastSyncAt && (
             <Badge variant="outline" className="text-xs">
@@ -543,63 +557,85 @@ export default function AdminAnalytics() {
           <CardContent>
             <div className="h-72">
               {chartsReady ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={incidentTrend}>
-                    <defs>
-                      <linearGradient id="simGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#0d9488" stopOpacity={0.3} />
-                        <stop offset="100%" stopColor="#0d9488" stopOpacity={0} />
-                      </linearGradient>
-                      <linearGradient id="fireGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.3} />
-                        <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
-                      </linearGradient>
-                      <linearGradient id="payGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#f59e0b" stopOpacity={0.25} />
-                        <stop offset="100%" stopColor="#f59e0b" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="day" stroke="#94a3b8" fontSize={12} />
-                    <YAxis stroke="#94a3b8" fontSize={11} />
-                    <Tooltip
-                      formatter={(value: number, name: string) => {
-                        if (name === "Payout (Lakh)") return [`₹${value.toFixed(2)}L`, name];
-                        return [value, name];
-                      }}
-                      contentStyle={{
-                        background: "#ffffff",
-                        border: "1px solid #e2e8f0",
-                        borderRadius: 8,
-                        fontSize: 12,
-                      }}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="simulate"
-                      stroke="#0d9488"
-                      fill="url(#simGrad)"
-                      strokeWidth={2}
-                      name="Simulations"
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="fire"
-                      stroke="#3b82f6"
-                      fill="url(#fireGrad)"
-                      strokeWidth={2}
-                      name="Fire Drills"
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="payoutLakh"
-                      stroke="#f59e0b"
-                      fill="url(#payGrad)"
-                      strokeWidth={2}
-                      name="Payout (Lakh)"
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
+                incidentTrend.length > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={incidentTrend}>
+                      <defs>
+                        <linearGradient id="simGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#0d9488" stopOpacity={0.3} />
+                          <stop offset="100%" stopColor="#0d9488" stopOpacity={0} />
+                        </linearGradient>
+                        <linearGradient id="fireGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.3} />
+                          <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
+                        </linearGradient>
+                        <linearGradient id="payGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#f59e0b" stopOpacity={0.25} />
+                          <stop offset="100%" stopColor="#f59e0b" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis dataKey="day" stroke="#94a3b8" fontSize={12} />
+                      <YAxis stroke="#94a3b8" fontSize={11} />
+                      <Tooltip
+                        formatter={(value: number | undefined, name: string | undefined) => {
+                          const seriesName = name ?? "";
+                          if (seriesName === "Payout (Lakh)") return [`₹${(value ?? 0).toFixed(2)}L`, seriesName];
+                          return [value ?? 0, seriesName];
+                        }}
+                        contentStyle={{
+                          background: "#ffffff",
+                          border: "1px solid #e2e8f0",
+                          borderRadius: 8,
+                          fontSize: 12,
+                        }}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="simulate"
+                        stroke="#0d9488"
+                        fill="url(#simGrad)"
+                        strokeWidth={2}
+                        name="Simulations"
+                        isAnimationActive={chartsReady}
+                        animationBegin={0}
+                        animationDuration={CHART_DURATION_FAST}
+                        animationEasing="ease-out"
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="fire"
+                        stroke="#3b82f6"
+                        fill="url(#fireGrad)"
+                        strokeWidth={2}
+                        name="Fire Drills"
+                        isAnimationActive={chartsReady}
+                        animationBegin={60}
+                        animationDuration={CHART_DURATION_MEDIUM}
+                        animationEasing="ease-out"
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="payoutLakh"
+                        stroke="#f59e0b"
+                        fill="url(#payGrad)"
+                        strokeWidth={2}
+                        name="Payout (Lakh)"
+                        isAnimationActive={chartsReady}
+                        animationBegin={120}
+                        animationDuration={CHART_DURATION_SLOW}
+                        animationEasing="ease-out"
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-full rounded-lg border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center text-center px-4">
+                    <div>
+                      <p className="text-sm font-medium text-slate-800">No incident trend in selected window</p>
+                      <p className="text-xs text-muted-foreground mt-1">Run a drill or widen the window to populate this chart.</p>
+                    </div>
+                  </div>
+                )
               ) : (
                 <div className="h-full w-full rounded-lg bg-slate-100" />
               )}
@@ -650,6 +686,10 @@ export default function AdminAnalytics() {
                       fill="#0d9488"
                       fillOpacity={0.2}
                       strokeWidth={2}
+                      isAnimationActive={chartsReady}
+                      animationBegin={80}
+                      animationDuration={CHART_DURATION_MEDIUM}
+                      animationEasing="ease-out"
                     />
                   </RadarChart>
                 </ResponsiveContainer>
@@ -679,36 +719,44 @@ export default function AdminAnalytics() {
                 </tr>
               </thead>
               <tbody>
-                {cityRows.map((city) => (
-                  <tr key={city.city} className="border-b border-slate-100 hover:bg-slate-50">
-                    <td className="p-3">
-                      <div className="flex items-center gap-2">
-                        <MapPin className="w-3.5 h-3.5 text-muted-foreground" />
-                        <span className="text-sm font-medium">{city.city}</span>
-                      </div>
-                    </td>
-                    <td className="p-3 text-sm">{city.claims.toLocaleString()}</td>
-                    <td className="p-3 text-sm text-amber-600">{formatCurrency(city.payouts)}</td>
-                    <td className="p-3 text-sm text-emerald-600">{formatCurrency(city.avg_claim)}</td>
-                    <td className="p-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-16 h-1.5 rounded-full bg-slate-200 overflow-hidden">
-                          <div
-                            className={`h-full rounded-full ${
-                              city.rejection_rate_pct > 12
-                                ? "bg-red-500"
-                                : city.rejection_rate_pct > 8
-                                ? "bg-amber-500"
-                                : "bg-emerald-500"
-                            }`}
-                            style={{ width: `${Math.min(city.rejection_rate_pct, 100)}%` }}
-                          />
+                {cityRows.length > 0 ? (
+                  cityRows.map((city) => (
+                    <tr key={city.city} className="border-b border-slate-100 hover:bg-slate-50">
+                      <td className="p-3">
+                        <div className="flex items-center gap-2">
+                          <MapPin className="w-3.5 h-3.5 text-muted-foreground" />
+                          <span className="text-sm font-medium">{city.city}</span>
                         </div>
-                        <span className="text-xs">{city.rejection_rate_pct.toFixed(1)}%</span>
-                      </div>
+                      </td>
+                      <td className="p-3 text-sm">{city.claims.toLocaleString()}</td>
+                      <td className="p-3 text-sm text-amber-600">{formatCurrency(city.payouts)}</td>
+                      <td className="p-3 text-sm text-emerald-600">{formatCurrency(city.avg_claim)}</td>
+                      <td className="p-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-16 h-1.5 rounded-full bg-slate-200 overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${
+                                city.rejection_rate_pct > 12
+                                  ? "bg-red-500"
+                                  : city.rejection_rate_pct > 8
+                                  ? "bg-amber-500"
+                                  : "bg-emerald-500"
+                              }`}
+                              style={{ width: `${Math.min(city.rejection_rate_pct, 100)}%` }}
+                            />
+                          </div>
+                          <span className="text-xs">{city.rejection_rate_pct.toFixed(1)}%</span>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={5} className="p-6 text-center text-sm text-muted-foreground">
+                      No city-level records available for this window.
                     </td>
                   </tr>
-                ))}
+                )}
               </tbody>
             </table>
           </div>
@@ -723,59 +771,80 @@ export default function AdminAnalytics() {
         <CardContent>
           <div className="h-64">
             {chartsReady ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={appealTrend}>
-                  <defs>
-                    <linearGradient id="apSubGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.25} />
-                      <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="apResGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#10b981" stopOpacity={0.25} />
-                      <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="apBackGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#f59e0b" stopOpacity={0.2} />
-                      <stop offset="100%" stopColor="#f59e0b" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="day" stroke="#94a3b8" fontSize={12} />
-                  <YAxis stroke="#94a3b8" fontSize={11} />
-                  <Tooltip
-                    contentStyle={{
-                      background: "#ffffff",
-                      border: "1px solid #e2e8f0",
-                      borderRadius: 8,
-                      fontSize: 12,
-                    }}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="submitted"
-                    stroke="#3b82f6"
-                    fill="url(#apSubGrad)"
-                    strokeWidth={2}
-                    name="Submitted"
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="resolved"
-                    stroke="#10b981"
-                    fill="url(#apResGrad)"
-                    strokeWidth={2}
-                    name="Resolved"
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="backlog"
-                    stroke="#f59e0b"
-                    fill="url(#apBackGrad)"
-                    strokeWidth={2}
-                    name="Backlog"
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+              appealTrend.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={appealTrend}>
+                    <defs>
+                      <linearGradient id="apSubGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.25} />
+                        <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
+                      </linearGradient>
+                      <linearGradient id="apResGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#10b981" stopOpacity={0.25} />
+                        <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
+                      </linearGradient>
+                      <linearGradient id="apBackGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#f59e0b" stopOpacity={0.2} />
+                        <stop offset="100%" stopColor="#f59e0b" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="day" stroke="#94a3b8" fontSize={12} />
+                    <YAxis stroke="#94a3b8" fontSize={11} />
+                    <Tooltip
+                      contentStyle={{
+                        background: "#ffffff",
+                        border: "1px solid #e2e8f0",
+                        borderRadius: 8,
+                        fontSize: 12,
+                      }}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="submitted"
+                      stroke="#3b82f6"
+                      fill="url(#apSubGrad)"
+                      strokeWidth={2}
+                      name="Submitted"
+                      isAnimationActive={chartsReady}
+                      animationBegin={0}
+                      animationDuration={CHART_DURATION_FAST}
+                      animationEasing="ease-out"
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="resolved"
+                      stroke="#10b981"
+                      fill="url(#apResGrad)"
+                      strokeWidth={2}
+                      name="Resolved"
+                      isAnimationActive={chartsReady}
+                      animationBegin={60}
+                      animationDuration={CHART_DURATION_MEDIUM}
+                      animationEasing="ease-out"
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="backlog"
+                      stroke="#f59e0b"
+                      fill="url(#apBackGrad)"
+                      strokeWidth={2}
+                      name="Backlog"
+                      isAnimationActive={chartsReady}
+                      animationBegin={120}
+                      animationDuration={CHART_DURATION_SLOW}
+                      animationEasing="ease-out"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-full rounded-lg border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center text-center px-4">
+                  <div>
+                    <p className="text-sm font-medium text-slate-800">No appeal throughput in selected window</p>
+                    <p className="text-xs text-muted-foreground mt-1">Appeals activity will render here as soon as records arrive.</p>
+                  </div>
+                </div>
+              )
             ) : (
               <div className="h-full w-full rounded-lg bg-slate-100" />
             )}
@@ -814,24 +883,31 @@ export default function AdminAnalytics() {
           <CardTitle className="text-base">Platform Breakdown</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
-            {platformRows.map((platform) => (
-              <div
-                key={platform.platform}
-                className="p-4 rounded-xl bg-slate-50 border border-slate-100 text-center"
-              >
+          {platformRows.length > 0 ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+              {platformRows.map((platform) => (
                 <div
-                  className="w-10 h-10 rounded-full mx-auto mb-2 flex items-center justify-center text-sm font-bold text-white"
-                  style={{ background: platform.color }}
+                  key={platform.platform}
+                  className="p-4 rounded-xl bg-slate-50 border border-slate-100 text-center"
                 >
-                  {platform.platform[0]}
+                  <div
+                    className="w-10 h-10 rounded-full mx-auto mb-2 flex items-center justify-center text-sm font-bold text-white"
+                    style={{ background: platform.color }}
+                  >
+                    {platform.platform[0]}
+                  </div>
+                  <p className="text-sm font-medium">{platform.platform}</p>
+                  <p className="text-lg font-bold mt-1">{platform.workers.toLocaleString()}</p>
+                  <p className="text-xs text-muted-foreground">{platform.share.toFixed(1)}% share</p>
                 </div>
-                <p className="text-sm font-medium">{platform.platform}</p>
-                <p className="text-lg font-bold mt-1">{platform.workers.toLocaleString()}</p>
-                <p className="text-xs text-muted-foreground">{platform.share.toFixed(1)}% share</p>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
+              <p className="text-sm font-medium text-slate-800">No platform split available</p>
+              <p className="text-xs text-muted-foreground mt-1">Platform share cards will appear once worker platform data is ingested.</p>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

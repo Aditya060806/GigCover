@@ -88,6 +88,9 @@ const monthlyData = [
   { month: "Jan", claims: 1247, payouts: 4527800, premiums: 3750000 },
 ];
 
+const CHART_DURATION_FAST = 560;
+const CHART_DURATION_MEDIUM = 700;
+
 function timeAgo(dateStr: string) {
   const diff = Date.now() - new Date(dateStr).getTime();
   const min = Math.floor(diff / 60000);
@@ -475,6 +478,10 @@ export default function AdminOverview() {
                       fill="url(#premGrad)"
                       strokeWidth={2}
                       name="Premiums"
+                      isAnimationActive={chartsReady}
+                      animationBegin={0}
+                      animationDuration={CHART_DURATION_FAST}
+                      animationEasing="ease-out"
                     />
                     <Area
                       type="monotone"
@@ -483,6 +490,10 @@ export default function AdminOverview() {
                       fill="url(#payGrad)"
                       strokeWidth={2}
                       name="Payouts"
+                      isAnimationActive={chartsReady}
+                      animationBegin={80}
+                      animationDuration={CHART_DURATION_MEDIUM}
+                      animationEasing="ease-out"
                     />
                   </AreaChart>
                 </ResponsiveContainer>
@@ -511,6 +522,10 @@ export default function AdminOverview() {
                       outerRadius={80}
                       paddingAngle={3}
                       dataKey="value"
+                      isAnimationActive={chartsReady}
+                      animationBegin={60}
+                      animationDuration={CHART_DURATION_MEDIUM}
+                      animationEasing="ease-out"
                     >
                       {cityDist.map((entry) => (
                         <Cell key={entry.name} fill={entry.color} />

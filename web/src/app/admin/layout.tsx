@@ -13,12 +13,17 @@ import {
   Menu,
   X,
   ArrowLeft,
+  RotateCw,
+  Loader2,
+  Clock3,
+  Activity,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
+import { supabase } from "@/lib/supabase";
 
 const adminNavItems = [
   { href: "/admin", label: "Overview", icon: LayoutDashboard },
@@ -36,6 +41,88 @@ export default function AdminLayout({
 }) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [openAppeals, setOpenAppeals] = useState(0);
+  const [investigatingCount, setInvestigatingCount] = useState(0);
+  const [firedRuns24h, setFiredRuns24h] = useState(0);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  const realtimeRefreshTimerRef = useRef<number | null>(null);
+
+  const loadShellStatus = useCallback(async (showSpinner = false) => {
+    if (showSpinner) setSyncing(true);
+    try {
+      const [appealsResult, fraudResult, runsResult] = await Promise.all([
+        supabase
+          .from("claim_appeals")
+          .select("id", { head: true, count: "exact" })
+          .in("status", ["submitted", "under_review"]),
+        supabase
+          .from("fraud_logs")
+          .select("id", { head: true, count: "exact" })
+          .eq("status", "investigating"),
+        supabase
+          .from("incident_runs")
+          .select("id", { head: true, count: "exact" })
+          .eq("mode", "fire")
+          .gte("started_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()),
+      ]);
+
+      setOpenAppeals(appealsResult.count ?? 0);
+      setInvestigatingCount(fraudResult.count ?? 0);
+      setFiredRuns24h(runsResult.count ?? 0);
+      setLastSyncAt(new Date().toISOString());
+    } finally {
+      if (showSpinner) setSyncing(false);
+    }
+  }, []);
+
+  const scheduleRealtimeRefresh = useCallback(() => {
+    if (realtimeRefreshTimerRef.current !== null) {
+      window.clearTimeout(realtimeRefreshTimerRef.current);
+    }
+    realtimeRefreshTimerRef.current = window.setTimeout(() => {
+      realtimeRefreshTimerRef.current = null;
+      void loadShellStatus();
+    }, 600);
+  }, [loadShellStatus]);
+
+  useEffect(() => {
+    void loadShellStatus();
+    const intervalId = window.setInterval(() => {
+      void loadShellStatus();
+    }, 30000);
+
+    return () => window.clearInterval(intervalId);
+  }, [loadShellStatus]);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel("admin-shell-layout-live")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "claim_appeals" },
+        scheduleRealtimeRefresh
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "fraud_logs" },
+        scheduleRealtimeRefresh
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "incident_runs" },
+        scheduleRealtimeRefresh
+      )
+      .subscribe();
+
+    return () => {
+      if (realtimeRefreshTimerRef.current !== null) {
+        window.clearTimeout(realtimeRefreshTimerRef.current);
+        realtimeRefreshTimerRef.current = null;
+      }
+      void supabase.removeChannel(channel);
+    };
+  }, [scheduleRealtimeRefresh]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50">
@@ -95,6 +182,29 @@ export default function AdminLayout({
           })}
         </nav>
 
+        <div className="px-4 pb-3">
+          <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-semibold text-slate-700">Ops Pulse</p>
+              <Activity className="w-3.5 h-3.5 text-teal-600" />
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-md bg-white border border-slate-200 py-1.5">
+                <p className="text-[10px] text-muted-foreground">Appeals</p>
+                <p className="text-xs font-semibold text-slate-900">{openAppeals}</p>
+              </div>
+              <div className="rounded-md bg-white border border-slate-200 py-1.5">
+                <p className="text-[10px] text-muted-foreground">Fraud</p>
+                <p className="text-xs font-semibold text-slate-900">{investigatingCount}</p>
+              </div>
+              <div className="rounded-md bg-white border border-slate-200 py-1.5">
+                <p className="text-[10px] text-muted-foreground">Fires</p>
+                <p className="text-xs font-semibold text-slate-900">{firedRuns24h}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div className="p-4 border-t border-slate-100">
           <Link href="/dashboard">
             <Button variant="ghost" size="sm" className="w-full justify-start text-muted-foreground mb-1">
@@ -129,14 +239,44 @@ export default function AdminLayout({
               )?.label || "Overview"}
             </h1>
           </div>
-          <Badge variant="warning" className="text-xs">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mr-1.5 animate-pulse" />
-            Live System
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 text-xs gap-1"
+              onClick={() => {
+                void loadShellStatus(true);
+              }}
+              disabled={syncing}
+            >
+              {syncing ? (
+                <>
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  Sync
+                </>
+              ) : (
+                <>
+                  <RotateCw className="w-3 h-3" />
+                  Refresh
+                </>
+              )}
+            </Button>
+            <Badge variant="warning" className="text-xs">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mr-1.5 animate-pulse" />
+              Live System
+            </Badge>
+            {lastSyncAt && (
+              <Badge variant="secondary" className="text-[10px] gap-1 hidden sm:inline-flex">
+                <Clock3 className="w-3 h-3" />
+                {new Date(lastSyncAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+              </Badge>
+            )}
+          </div>
         </header>
 
         <main className="flex-1 overflow-y-auto p-4 lg:p-6">
           <motion.div
+            className="motion-shell"
             key={pathname}
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
