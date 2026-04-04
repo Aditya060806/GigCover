@@ -1,9 +1,10 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -11,9 +12,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CloudRain, Thermometer, Wind, AlertTriangle, Layers, Loader2 } from "lucide-react";
+import {
+  CloudRain,
+  Thermometer,
+  Wind,
+  AlertTriangle,
+  Layers,
+  Loader2,
+  RotateCw,
+  Activity,
+  Users,
+  ShieldAlert,
+  Sparkles,
+} from "lucide-react";
 import { fetchZoneHeatmap } from "@/lib/data";
 import { supabase } from "@/lib/supabase";
+import { formatCurrency } from "@/lib/utils";
 import type { ZoneHeatmap } from "@/types/database";
 
 const RiskMapComponent = dynamic(() => import("@/components/dashboard/RiskMap"), {
@@ -52,65 +66,132 @@ export default function MapPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<Date | null>(null);
+  const [manualRefreshing, setManualRefreshing] = useState(false);
+  const realtimeRefreshTimerRef = useRef<number | null>(null);
+
+  const loadHeatmap = useCallback(async (initial = false) => {
+    if (initial) setLoading(true);
+    const data = await fetchZoneHeatmap();
+
+    setZones(data);
+    setLastSync(new Date());
+    setError(data.length === 0 ? "No live map rows available from v_zone_heatmap." : null);
+    if (initial) setLoading(false);
+  }, []);
+
+  const scheduleRealtimeRefresh = useCallback(() => {
+    if (realtimeRefreshTimerRef.current !== null) {
+      window.clearTimeout(realtimeRefreshTimerRef.current);
+    }
+    realtimeRefreshTimerRef.current = window.setTimeout(() => {
+      realtimeRefreshTimerRef.current = null;
+      void loadHeatmap(false);
+    }, 600);
+  }, [loadHeatmap]);
+
+  const handleManualRefresh = useCallback(async () => {
+    setManualRefreshing(true);
+    try {
+      await loadHeatmap(false);
+    } finally {
+      setManualRefreshing(false);
+    }
+  }, [loadHeatmap]);
 
   useEffect(() => {
-    let mounted = true;
-
-    const load = async (initial = false) => {
-      if (initial) setLoading(true);
-      const data = await fetchZoneHeatmap();
-      if (!mounted) return;
-
-      setZones(data);
-      setLastSync(new Date());
-      setError(data.length === 0 ? "No live map rows available from v_zone_heatmap." : null);
-      if (initial) setLoading(false);
-    };
-
-    load(true);
+    void loadHeatmap(true);
 
     // Realtime pushes (weather / claims / workers / triggers) refresh the zone heatmap immediately.
     const realtimeChannel = supabase
       .channel("zone-heatmap-live")
       .on("postgres_changes", { event: "*", schema: "public", table: "weather_events" }, () => {
-        void load(false);
+        scheduleRealtimeRefresh();
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "claims" }, () => {
-        void load(false);
+        scheduleRealtimeRefresh();
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "gig_workers" }, () => {
-        void load(false);
+        scheduleRealtimeRefresh();
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "trigger_events" }, () => {
-        void load(false);
+        scheduleRealtimeRefresh();
       })
       .subscribe();
 
     // Polling fallback in case realtime is disabled in the Supabase project.
-    const interval = setInterval(() => load(false), 30000);
+    const interval = window.setInterval(() => {
+      void loadHeatmap(false);
+    }, 30000);
 
     return () => {
-      mounted = false;
-      clearInterval(interval);
+      window.clearInterval(interval);
+      if (realtimeRefreshTimerRef.current !== null) {
+        window.clearTimeout(realtimeRefreshTimerRef.current);
+        realtimeRefreshTimerRef.current = null;
+      }
       void supabase.removeChannel(realtimeChannel);
     };
-  }, []);
+  }, [loadHeatmap, scheduleRealtimeRefresh]);
 
-  const cityZones = zones.filter(
-    (z) => z.city.toLowerCase() === (CITY_MAP[selectedCity] ?? selectedCity).toLowerCase()
+  const cityLabel = CITY_MAP[selectedCity] ?? selectedCity;
+
+  const cityZones = useMemo(
+    () =>
+      zones.filter(
+        (z) => z.city.toLowerCase() === cityLabel.toLowerCase()
+      ),
+    [zones, cityLabel]
   );
+
+  const avgRiskScore =
+    cityZones.length > 0
+      ? cityZones.reduce((sum, zone) => sum + riskLevelToScore(zone.risk_level), 0) / cityZones.length
+      : 0;
+  const criticalZones = cityZones.filter((zone) => riskLevelToScore(zone.risk_level) >= 0.8).length;
+  const highRiskZones = cityZones.filter((zone) => riskLevelToScore(zone.risk_level) >= 0.6).length;
+  const totalWorkers = cityZones.reduce((sum, zone) => sum + zone.active_workers, 0);
+  const totalClaims = cityZones.reduce((sum, zone) => sum + zone.total_claims, 0);
+  const totalPayouts = cityZones.reduce((sum, zone) => sum + zone.total_payouts, 0);
+  const totalExtremeEvents = cityZones.reduce((sum, zone) => sum + zone.extreme_event_count, 0);
+
+  const mapPulse = [
+    `${cityZones.length} zones are live in ${cityLabel} with ${totalWorkers.toLocaleString("en-IN")} active workers in coverage.`,
+    `${highRiskZones} zones are currently high risk and ${criticalZones} zones are in critical conditions requiring rapid response readiness.`,
+    `${totalClaims.toLocaleString("en-IN")} historical claims represent ${formatCurrency(totalPayouts)} in payouts across this city's map footprint.`,
+  ];
 
   return (
     <div className="space-y-6">
       {/* Controls */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold">Live Risk Map</h2>
+          <h2 className="text-xl font-bold">Geo Risk Command Map</h2>
           <p className="text-sm text-muted-foreground">
-            Real-time weather & disruption monitoring across zones
+            Live weather-disruption intelligence with zone-level operational context
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5"
+            disabled={manualRefreshing}
+            onClick={() => {
+              void handleManualRefresh();
+            }}
+          >
+            {manualRefreshing ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Syncing
+              </>
+            ) : (
+              <>
+                <RotateCw className="h-3.5 w-3.5" />
+                Refresh
+              </>
+            )}
+          </Button>
           <Select value={selectedCity} onValueChange={setSelectedCity}>
             <SelectTrigger className="w-40">
               <SelectValue />
@@ -123,13 +204,80 @@ export default function MapPage() {
               <SelectItem value="hyderabad">Hyderabad</SelectItem>
             </SelectContent>
           </Select>
-          <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-full px-3 py-2">
+          <Badge variant="outline" className="gap-1.5">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="text-xs text-muted-foreground">
-              Live{lastSync ? ` · ${lastSync.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
-            </span>
+            Live Feed
+          </Badge>
+          {lastSync && (
+            <Badge variant="secondary" className="text-[10px]">
+              Synced {lastSync.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-emerald-200 bg-gradient-to-r from-emerald-50 via-cyan-50 to-sky-50 p-4">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 rounded-lg bg-white/80 p-2 text-emerald-700 border border-emerald-200">
+            <Activity className="h-4 w-4" />
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-sm font-semibold text-slate-900">City Ops Pulse</p>
+            {mapPulse.map((line) => (
+              <p key={line} className="text-xs text-slate-700">
+                {line}
+              </p>
+            ))}
           </div>
         </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <Card className="border-slate-200 bg-white/90">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground">Average Risk</p>
+              <ShieldAlert className="h-3.5 w-3.5 text-amber-600" />
+            </div>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">
+              {Math.round(avgRiskScore * 100)}%
+            </p>
+            <p className="text-[11px] text-muted-foreground mt-1">Across {cityZones.length} tracked zones</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-slate-200 bg-white/90">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground">High-Risk Zones</p>
+              <AlertTriangle className="h-3.5 w-3.5 text-red-500" />
+            </div>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">{highRiskZones}</p>
+            <p className="text-[11px] text-muted-foreground mt-1">{criticalZones} critical right now</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-slate-200 bg-white/90">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground">Worker Coverage</p>
+              <Users className="h-3.5 w-3.5 text-blue-600" />
+            </div>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">{totalWorkers.toLocaleString("en-IN")}</p>
+            <p className="text-[11px] text-muted-foreground mt-1">{totalClaims.toLocaleString("en-IN")} cumulative claims</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-slate-200 bg-white/90">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground">Event + Payout Footprint</p>
+              <Sparkles className="h-3.5 w-3.5 text-teal-600" />
+            </div>
+            <p className="mt-2 text-xl font-semibold text-slate-900">{formatCurrency(totalPayouts)}</p>
+            <p className="text-[11px] text-muted-foreground mt-1">{totalExtremeEvents} extreme events logged</p>
+          </CardContent>
+        </Card>
       </div>
 
       {error && (
@@ -146,7 +294,7 @@ export default function MapPage() {
 
         {/* Zone Risk Sidebar */}
         <div className="space-y-4">
-          <Card>
+          <Card className="border-slate-200 bg-white/95">
             <CardHeader className="pb-3">
               <CardTitle className="text-sm flex items-center gap-2">
                 <Layers className="w-4 h-4" />
@@ -164,10 +312,7 @@ export default function MapPage() {
                 cityZones.map((zone) => {
                   const risk = riskLevelToScore(zone.risk_level);
                   return (
-                    <div
-                      key={zone.zone_name}
-                      className="p-3 rounded-lg bg-slate-50 border border-slate-100 hover:bg-slate-100 transition-colors cursor-pointer"
-                    >
+                    <div key={zone.zone_name} className="p-3 rounded-lg bg-slate-50 border border-slate-100 hover:bg-slate-100 transition-colors cursor-pointer">
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-sm font-medium">{zone.zone_name}</span>
                         <Badge
@@ -213,7 +358,7 @@ export default function MapPage() {
           </Card>
 
           {/* Legend */}
-          <Card>
+          <Card className="border-slate-200 bg-white/95">
             <CardHeader className="pb-3">
               <CardTitle className="text-sm">Risk Legend</CardTitle>
             </CardHeader>

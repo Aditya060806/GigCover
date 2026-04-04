@@ -542,6 +542,33 @@ class AddPlaceRequest(BaseModel):
     density: str = "medium"
 
 
+class IncidentRunRequest(BaseModel):
+    city: str
+    zone: str
+    trigger_type: str
+    mode: str = "simulate"
+
+
+class FraudDecisionRequest(BaseModel):
+    fraud_log_id: str
+    action: str
+    reviewer: str = "admin-panel"
+    note: Optional[str] = None
+
+
+class FraudAppealRequest(BaseModel):
+    claim_id: str
+    reason: str = Field(min_length=12, max_length=1000)
+    worker_id: Optional[str] = None
+
+
+class FraudAppealDecisionRequest(BaseModel):
+    appeal_id: str
+    action: str
+    reviewer: str = "admin-panel"
+    note: Optional[str] = None
+
+
 # ── Helper Functions (Model-backed with simulation fallback) ─
 
 def _build_risk_features(city: str, zone: str, platform: str, history_months: int) -> dict:
@@ -782,6 +809,36 @@ def _fallback_shap(req, score):
     ]
 
 
+def _simulate_trigger_payload(city: str, zone: str, trigger_type: str) -> Dict[str, Any]:
+    threshold = TRIGGER_THRESHOLDS.get(trigger_type)
+    if not threshold:
+        raise HTTPException(status_code=400, detail=f"Unknown trigger type: {trigger_type}")
+
+    np.random.seed(hash(f"{city}{zone}{datetime.utcnow().isoformat()}") % 2**31)
+    workers_affected = int(np.random.uniform(80, 400))
+    avg_payout = threshold["payout_pct"] / 100 * AVG_DAILY_EARNINGS.get("Swiggy", 800)
+    total_payout = round(workers_affected * avg_payout)
+
+    threshold_value = float(threshold["threshold"])
+    if threshold_value <= 1:
+        measured_value = 1.0
+    else:
+        measured_value = round(threshold_value * float(np.random.uniform(1.05, 1.45)), 1)
+
+    return {
+        "simulation": True,
+        "trigger_type": trigger_type,
+        "city": city,
+        "zone": zone,
+        "workers_affected": workers_affected,
+        "avg_payout_per_worker": round(avg_payout),
+        "total_estimated_payout": total_payout,
+        "threshold_value": threshold_value,
+        "measured_value": measured_value,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+
 # ── API Endpoints ──────────────────────────────────────────
 
 @app.get("/")
@@ -799,9 +856,17 @@ def root():
         "endpoints": [
             "/api/v1/risk/calculate-premium",
             "/api/v1/risk/zone-heatmap",
+            "/api/v1/admin/kpis",
+            "/api/v1/admin/snapshot",
             "/api/v1/fraud/check",
+            "/api/v1/fraud/decision",
+            "/api/v1/fraud/appeals/open",
+            "/api/v1/fraud/appeals/submit",
+            "/api/v1/fraud/appeals/decision",
             "/api/v1/triggers/check",
             "/api/v1/triggers/simulate",
+            "/api/v1/incidents/run",
+            "/api/v1/incidents/recent",
             "/api/v1/weather/current",
             "/health",
         ],
@@ -1010,24 +1075,649 @@ def check_triggers(req: TriggerCheckRequest):
 @app.post("/api/v1/triggers/simulate")
 def simulate_trigger(city: str, zone: str, trigger_type: str):
     """Simulate a parametric trigger for testing."""
-    threshold = TRIGGER_THRESHOLDS.get(trigger_type)
-    if not threshold:
-        raise HTTPException(status_code=400, detail=f"Unknown trigger type: {trigger_type}")
+    return _simulate_trigger_payload(city, zone, trigger_type)
 
-    np.random.seed(hash(f"{city}{zone}{datetime.utcnow().isoformat()}") % 2**31)
-    workers_affected = int(np.random.uniform(80, 400))
-    avg_payout = threshold["payout_pct"] / 100 * AVG_DAILY_EARNINGS.get("Swiggy", 800)
-    total_payout = round(workers_affected * avg_payout)
+
+@app.post("/api/v1/incidents/run")
+def run_incident(req: IncidentRunRequest):
+    """Create a manual incident run for admin simulation or fire drill flows."""
+    mode = req.mode.strip().lower()
+    if mode not in {"simulate", "fire"}:
+        raise HTTPException(status_code=400, detail="mode must be one of: simulate, fire")
+
+    started = datetime.utcnow()
+    payload = _simulate_trigger_payload(req.city, req.zone, req.trigger_type)
+    payload["simulation"] = mode == "simulate"
+
+    trigger_event_id = None
+    incident_run_id = None
+
+    if _env("SUPABASE_URL") and _env("SUPABASE_SERVICE_ROLE_KEY"):
+        trigger_rows = _sb_insert(
+            "trigger_events",
+            [
+                {
+                    "trigger_type": req.trigger_type,
+                    "city": req.city,
+                    "zone": req.zone,
+                    "measured_value": payload["measured_value"],
+                    "threshold_value": payload["threshold_value"],
+                    "workers_affected": payload["workers_affected"],
+                    "total_payout": payload["total_estimated_payout"],
+                    "status": "completed",
+                    "is_manual": True,
+                }
+            ],
+        )
+        if trigger_rows:
+            trigger_event_id = trigger_rows[0].get("id")
+
+        incident_rows = _sb_insert(
+            "incident_runs",
+            [
+                {
+                    "city": req.city,
+                    "zone": req.zone,
+                    "trigger_type": req.trigger_type,
+                    "mode": mode,
+                    "workers_affected": payload["workers_affected"],
+                    "total_estimated_payout": payload["total_estimated_payout"],
+                    "avg_payout_per_worker": payload["avg_payout_per_worker"],
+                    "threshold_value": payload["threshold_value"],
+                    "measured_value": payload["measured_value"],
+                    "trigger_event_id": trigger_event_id,
+                    "started_at": started.isoformat(),
+                }
+            ],
+        )
+        if incident_rows:
+            incident_run_id = incident_rows[0].get("id")
+
+    finished = datetime.utcnow()
+    duration_ms = int((finished - started).total_seconds() * 1000)
+
+    if incident_run_id:
+        _sb_patch(
+            "incident_runs",
+            filters={"id": f"eq.{incident_run_id}"},
+            payload={
+                "completed_at": finished.isoformat(),
+                "duration_ms": duration_ms,
+            },
+        )
+
+    payload["incident_id"] = incident_run_id
+    payload["trigger_event_id"] = trigger_event_id
+    payload["duration_ms"] = duration_ms
+    payload["mode"] = mode
+    return payload
+
+
+@app.get("/api/v1/incidents/recent")
+def recent_incidents(limit: int = 10):
+    """List recent incident simulations/fires from Supabase."""
+    safe_limit = max(1, min(limit, 50))
+    rows = _sb_get(
+        "incident_runs",
+        params={
+            "select": "id,city,zone,trigger_type,mode,workers_affected,total_estimated_payout,avg_payout_per_worker,threshold_value,measured_value,trigger_event_id,started_at,completed_at,duration_ms",
+            "order": "started_at.desc",
+            "limit": str(safe_limit),
+        },
+    )
+    return rows
+
+
+@app.get("/api/v1/admin/kpis")
+def admin_kpis(window_days: int = 14):
+    """Aggregate live operational KPIs for admin analytics panels."""
+    safe_days = max(3, min(window_days, 60))
+    now = datetime.utcnow()
+    since = now - timedelta(days=safe_days)
+    since_iso = since.isoformat()
+    last_24h = now - timedelta(hours=24)
+
+    def _parse_dt(raw_value: Any) -> Optional[datetime]:
+        if not raw_value or not isinstance(raw_value, str):
+            return None
+        raw = raw_value.strip()
+        try:
+            if raw.endswith("Z"):
+                raw = raw[:-1] + "+00:00"
+            dt = datetime.fromisoformat(raw)
+            if dt.tzinfo is not None:
+                return dt.replace(tzinfo=None)
+            return dt
+        except Exception:
+            return None
+
+    incident_series: List[Dict[str, Any]] = []
+    incident_index: Dict[str, Dict[str, Any]] = {}
+    for day_offset in range(6, -1, -1):
+        day_key = (now - timedelta(days=day_offset)).date().isoformat()
+        bucket = {"date": day_key, "fire": 0, "simulate": 0, "payout": 0.0}
+        incident_series.append(bucket)
+        incident_index[day_key] = bucket
+
+    payout_total_24h = 0.0
+    workers_protected_24h = 0
+    fire_drills = 0
+    simulations = 0
+    incident_latencies: List[float] = []
+
+    incident_rows = _sb_get(
+        "incident_runs",
+        params={
+            "select": "mode,total_estimated_payout,workers_affected,duration_ms,started_at",
+            "started_at": f"gte.{since_iso}",
+            "order": "started_at.desc",
+            "limit": "800",
+        },
+    )
+
+    for row in incident_rows:
+        mode = str(row.get("mode") or "simulate").strip().lower()
+        started_at = _parse_dt(row.get("started_at"))
+        payout = float(row.get("total_estimated_payout") or 0)
+        workers = int(row.get("workers_affected") or 0)
+
+        if mode == "fire":
+            fire_drills += 1
+        else:
+            simulations += 1
+
+        if started_at and started_at >= last_24h and mode == "fire":
+            payout_total_24h += payout
+            workers_protected_24h += workers
+
+        if started_at:
+            bucket = incident_index.get(started_at.date().isoformat())
+            if bucket:
+                if mode == "fire":
+                    bucket["fire"] += 1
+                else:
+                    bucket["simulate"] += 1
+                bucket["payout"] += payout
+
+        duration_ms = row.get("duration_ms")
+        if duration_ms is not None:
+            try:
+                incident_latencies.append(float(duration_ms))
+            except (TypeError, ValueError):
+                pass
+
+    for bucket in incident_series:
+        bucket["payout"] = round(float(bucket["payout"]), 2)
+
+    appeal_series: List[Dict[str, Any]] = []
+    appeal_index: Dict[str, Dict[str, Any]] = {}
+    for day_offset in range(6, -1, -1):
+        day_key = (now - timedelta(days=day_offset)).date().isoformat()
+        bucket = {"date": day_key, "submitted": 0, "resolved": 0}
+        appeal_series.append(bucket)
+        appeal_index[day_key] = bucket
+
+    open_appeals = 0
+    appeal_turnaround_hours: List[float] = []
+    resolved_within_24h = 0
+
+    appeal_rows = _sb_get(
+        "claim_appeals",
+        params={
+            "select": "status,submitted_at,resolved_at",
+            "submitted_at": f"gte.{since_iso}",
+            "order": "submitted_at.desc",
+            "limit": "800",
+        },
+    )
+
+    for row in appeal_rows:
+        status = str(row.get("status") or "submitted").strip().lower()
+        submitted_at = _parse_dt(row.get("submitted_at"))
+        resolved_at = _parse_dt(row.get("resolved_at"))
+
+        if status in {"submitted", "under_review"}:
+            open_appeals += 1
+
+        if submitted_at:
+            submitted_bucket = appeal_index.get(submitted_at.date().isoformat())
+            if submitted_bucket:
+                submitted_bucket["submitted"] += 1
+
+        if resolved_at:
+            resolved_bucket = appeal_index.get(resolved_at.date().isoformat())
+            if resolved_bucket:
+                resolved_bucket["resolved"] += 1
+
+        if submitted_at and resolved_at:
+            turnaround_hours = max((resolved_at - submitted_at).total_seconds() / 3600.0, 0.0)
+            appeal_turnaround_hours.append(turnaround_hours)
+            if turnaround_hours <= 24:
+                resolved_within_24h += 1
+
+    resolved_appeals_count = len(appeal_turnaround_hours)
+
+    fraud_rows = _sb_get(
+        "fraud_logs",
+        params={
+            "select": "status,detected_at,resolved_at",
+            "detected_at": f"gte.{since_iso}",
+            "order": "detected_at.desc",
+            "limit": "800",
+        },
+    )
+
+    blocked_count = 0
+    cleared_count = 0
+    fraud_resolution_hours: List[float] = []
+    for row in fraud_rows:
+        status = str(row.get("status") or "").strip().lower()
+        if status == "blocked":
+            blocked_count += 1
+        elif status == "cleared":
+            cleared_count += 1
+
+        if status in {"blocked", "cleared"}:
+            detected_at = _parse_dt(row.get("detected_at"))
+            resolved_at = _parse_dt(row.get("resolved_at"))
+            if detected_at and resolved_at:
+                fraud_resolution_hours.append(max((resolved_at - detected_at).total_seconds() / 3600.0, 0.0))
+
+    resolved_fraud_count = blocked_count + cleared_count
+
+    claims_rows = _sb_get(
+        "claims",
+        params={
+            "select": "city,amount,status",
+            "created_at": f"gte.{since_iso}",
+            "limit": "1500",
+        },
+    )
+    city_rollup: Dict[str, Dict[str, Any]] = {}
+    for row in claims_rows:
+        city = str(row.get("city") or "Unknown")
+        amount = float(row.get("amount") or 0)
+        status = str(row.get("status") or "").strip().lower()
+        if city not in city_rollup:
+            city_rollup[city] = {
+                "city": city,
+                "claims": 0,
+                "payouts": 0.0,
+                "rejected": 0,
+            }
+        city_rollup[city]["claims"] += 1
+        city_rollup[city]["payouts"] += amount
+        if status == "rejected":
+            city_rollup[city]["rejected"] += 1
+
+    city_snapshot: List[Dict[str, Any]] = []
+    for city_data in city_rollup.values():
+        claims_count = int(city_data["claims"])
+        payouts = float(city_data["payouts"])
+        rejected = int(city_data["rejected"])
+        city_snapshot.append(
+            {
+                "city": city_data["city"],
+                "claims": claims_count,
+                "payouts": round(payouts, 2),
+                "avg_claim": round(payouts / claims_count, 2) if claims_count else 0.0,
+                "rejection_rate_pct": round((rejected / claims_count) * 100, 1) if claims_count else 0.0,
+            }
+        )
+    city_snapshot.sort(key=lambda item: item["claims"], reverse=True)
+    city_snapshot = city_snapshot[:6]
+
+    worker_rows = _sb_get(
+        "gig_workers",
+        params={
+            "select": "platform,status",
+            "limit": "5000",
+        },
+    )
+    platform_rollup: Dict[str, int] = {}
+    for row in worker_rows:
+        platform = str(row.get("platform") or "Unknown")
+        status = str(row.get("status") or "").strip().lower()
+        if status and status != "active":
+            continue
+        platform_rollup[platform] = platform_rollup.get(platform, 0) + 1
+
+    # Fallback to all workers if no active-status rows were returned.
+    if not platform_rollup:
+        for row in worker_rows:
+            platform = str(row.get("platform") or "Unknown")
+            platform_rollup[platform] = platform_rollup.get(platform, 0) + 1
+
+    total_platform_workers = sum(platform_rollup.values())
+    platform_snapshot: List[Dict[str, Any]] = []
+    for platform, count in platform_rollup.items():
+        share = round((count / total_platform_workers) * 100, 1) if total_platform_workers else 0.0
+        platform_snapshot.append(
+            {
+                "platform": platform,
+                "workers": count,
+                "share": share,
+            }
+        )
+    platform_snapshot.sort(key=lambda item: item["workers"], reverse=True)
+    platform_snapshot = platform_snapshot[:6]
+
+    avg_incident_latency_ms = (
+        round(sum(incident_latencies) / len(incident_latencies), 1)
+        if incident_latencies
+        else None
+    )
+    avg_appeal_turnaround_hours = (
+        round(sum(appeal_turnaround_hours) / resolved_appeals_count, 2)
+        if resolved_appeals_count
+        else None
+    )
+    appeal_resolution_24h_pct = (
+        round((resolved_within_24h / resolved_appeals_count) * 100, 1)
+        if resolved_appeals_count
+        else None
+    )
+    fraud_block_rate_pct = (
+        round((blocked_count / resolved_fraud_count) * 100, 1)
+        if resolved_fraud_count
+        else None
+    )
+    avg_fraud_resolution_hours = (
+        round(sum(fraud_resolution_hours) / len(fraud_resolution_hours), 2)
+        if fraud_resolution_hours
+        else None
+    )
 
     return {
-        "simulation": True,
-        "trigger_type": trigger_type,
-        "city": city,
-        "zone": zone,
-        "workers_affected": workers_affected,
-        "avg_payout_per_worker": round(avg_payout),
-        "total_estimated_payout": total_payout,
-        "timestamp": datetime.utcnow().isoformat(),
+        "window_days": safe_days,
+        "generated_at": now.isoformat(),
+        "headline": {
+            "payout_total_24h": round(payout_total_24h, 2),
+            "payout_velocity_per_hour": round(payout_total_24h / 24.0, 2),
+            "workers_protected_24h": workers_protected_24h,
+            "open_appeals": open_appeals,
+            "avg_appeal_turnaround_hours": avg_appeal_turnaround_hours,
+            "appeal_resolution_24h_pct": appeal_resolution_24h_pct,
+            "fraud_block_rate_pct": fraud_block_rate_pct,
+            "avg_fraud_resolution_hours": avg_fraud_resolution_hours,
+            "fire_drills": fire_drills,
+            "simulations": simulations,
+            "avg_incident_latency_ms": avg_incident_latency_ms,
+        },
+        "incident_series": incident_series,
+        "appeal_series": appeal_series,
+        "city_snapshot": city_snapshot,
+        "platform_snapshot": platform_snapshot,
+    }
+
+
+@app.get("/api/v1/admin/snapshot")
+def admin_snapshot(window_days: int = 14, incident_limit: int = 8, appeal_limit: int = 8):
+    """Export a judge/demo-friendly operational snapshot payload."""
+    safe_days = max(3, min(window_days, 60))
+    safe_incident_limit = max(1, min(incident_limit, 50))
+    safe_appeal_limit = max(1, min(appeal_limit, 50))
+
+    kpis = admin_kpis(window_days=safe_days)
+    recent_incidents = _sb_get(
+        "incident_runs",
+        params={
+            "select": "id,city,zone,trigger_type,mode,workers_affected,total_estimated_payout,avg_payout_per_worker,threshold_value,measured_value,trigger_event_id,started_at,completed_at,duration_ms",
+            "order": "started_at.desc",
+            "limit": str(safe_incident_limit),
+        },
+    )
+    open_appeals = open_fraud_appeals(limit=safe_appeal_limit)
+
+    return {
+        "export_version": "admin-snapshot.v1",
+        "generated_at": datetime.utcnow().isoformat(),
+        "window_days": safe_days,
+        "headline": kpis.get("headline", {}),
+        "incident_series": kpis.get("incident_series", []),
+        "appeal_series": kpis.get("appeal_series", []),
+        "city_snapshot": kpis.get("city_snapshot", []),
+        "platform_snapshot": kpis.get("platform_snapshot", []),
+        "recent_incidents": recent_incidents,
+        "open_appeals": open_appeals,
+    }
+
+
+@app.post("/api/v1/fraud/decision")
+def fraud_decision(req: FraudDecisionRequest):
+    """Resolve a fraud alert from the admin panel."""
+    action = req.action.strip().lower()
+    if action not in {"clear", "block"}:
+        raise HTTPException(status_code=400, detail="action must be one of: clear, block")
+
+    status = "cleared" if action == "clear" else "blocked"
+    update_payload: Dict[str, Any] = {
+        "status": status,
+        "resolved_by": req.reviewer,
+        "resolved_at": datetime.utcnow().isoformat(),
+    }
+    if req.note and req.note.strip():
+        update_payload["reason"] = req.note.strip()
+
+    success = _sb_patch("fraud_logs", filters={"id": f"eq.{req.fraud_log_id}"}, payload=update_payload)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to update fraud log")
+
+    fraud_rows = _sb_get(
+        "fraud_logs",
+        params={
+            "select": "id,claim_id,status,resolved_at,resolved_by,reason",
+            "id": f"eq.{req.fraud_log_id}",
+            "limit": "1",
+        },
+    )
+    if not fraud_rows:
+        raise HTTPException(status_code=404, detail="Fraud log not found")
+
+    claim_row_id = fraud_rows[0].get("claim_id")
+    claim_status = "processing" if action == "clear" else "rejected"
+    if claim_row_id:
+        _sb_patch(
+            "claims",
+            filters={"id": f"eq.{claim_row_id}"},
+            payload={
+                "status": claim_status,
+                "process_time": "manual_review",
+            },
+        )
+
+    return {
+        "fraud_log_id": req.fraud_log_id,
+        "action": action,
+        "status": status,
+        "claim_status": claim_status,
+        "resolved_by": req.reviewer,
+        "resolved_at": update_payload["resolved_at"],
+    }
+
+
+@app.get("/api/v1/fraud/appeals/open")
+def open_fraud_appeals(limit: int = 20):
+    """Return currently open worker appeals with claim and worker context."""
+    safe_limit = max(1, min(limit, 100))
+    appeals = _sb_get(
+        "claim_appeals",
+        params={
+            "select": "id,claim_public_id,claim_row_id,worker_id,reason,status,submitted_at,resolved_at",
+            "status": "in.(submitted,under_review)",
+            "order": "submitted_at.desc",
+            "limit": str(safe_limit),
+        },
+    )
+
+    enriched: List[Dict[str, Any]] = []
+    for appeal in appeals:
+        claim_row_id = appeal.get("claim_row_id")
+        worker_row_id = appeal.get("worker_id")
+
+        claim = None
+        worker = None
+
+        if claim_row_id:
+            claim_rows = _sb_get(
+                "claims",
+                params={
+                    "select": "claim_id,city,zone,amount,fraud_score,status,worker_id",
+                    "id": f"eq.{claim_row_id}",
+                    "limit": "1",
+                },
+            )
+            if claim_rows:
+                claim = claim_rows[0]
+
+        if worker_row_id:
+            worker_rows = _sb_get(
+                "gig_workers",
+                params={
+                    "select": "worker_id,name,platform,city,zone",
+                    "id": f"eq.{worker_row_id}",
+                    "limit": "1",
+                },
+            )
+            if worker_rows:
+                worker = worker_rows[0]
+
+        enriched.append(
+            {
+                "appeal_id": appeal.get("id"),
+                "status": appeal.get("status"),
+                "reason": appeal.get("reason"),
+                "submitted_at": appeal.get("submitted_at"),
+                "claim_id": appeal.get("claim_public_id"),
+                "claim_amount": (claim or {}).get("amount"),
+                "fraud_score": (claim or {}).get("fraud_score"),
+                "claim_status": (claim or {}).get("status"),
+                "city": (claim or {}).get("city") or (worker or {}).get("city"),
+                "zone": (claim or {}).get("zone") or (worker or {}).get("zone"),
+                "worker_gw_id": (worker or {}).get("worker_id"),
+                "worker_name": (worker or {}).get("name"),
+                "platform": (worker or {}).get("platform"),
+            }
+        )
+
+    return enriched
+
+
+@app.post("/api/v1/fraud/appeals/submit")
+def submit_fraud_appeal(req: FraudAppealRequest):
+    """Allow workers to submit a human review request for a flagged claim."""
+    claim_rows = _sb_get(
+        "claims",
+        params={
+            "select": "id,claim_id,worker_id,status",
+            "claim_id": f"eq.{req.claim_id}",
+            "limit": "1",
+        },
+    )
+    if not claim_rows:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    claim = claim_rows[0]
+    claim_worker_id = claim.get("worker_id")
+
+    if req.worker_id and req.worker_id != claim_worker_id:
+        raise HTTPException(status_code=403, detail="Worker does not own this claim")
+
+    inserted = _sb_insert(
+        "claim_appeals",
+        [
+            {
+                "claim_public_id": req.claim_id,
+                "claim_row_id": claim.get("id"),
+                "worker_id": claim_worker_id,
+                "reason": req.reason.strip(),
+                "status": "submitted",
+                "submitted_at": datetime.utcnow().isoformat(),
+            }
+        ],
+    )
+    if not inserted:
+        raise HTTPException(status_code=500, detail="Unable to submit appeal. Ensure claim_appeals table exists.")
+
+    _sb_patch(
+        "claims",
+        filters={"id": f"eq.{claim.get('id')}"},
+        payload={
+            "status": "processing",
+            "process_time": "appeal_submitted",
+        },
+    )
+
+    return {
+        "appeal_id": inserted[0].get("id"),
+        "claim_id": req.claim_id,
+        "status": "submitted",
+        "submitted_at": inserted[0].get("submitted_at", datetime.utcnow().isoformat()),
+    }
+
+
+@app.post("/api/v1/fraud/appeals/decision")
+def resolve_fraud_appeal(req: FraudAppealDecisionRequest):
+    """Resolve a submitted appeal from the admin panel."""
+    action = req.action.strip().lower()
+    if action not in {"accept", "reject"}:
+        raise HTTPException(status_code=400, detail="action must be one of: accept, reject")
+
+    appeal_status = "accepted" if action == "accept" else "rejected"
+    resolved_at = datetime.utcnow().isoformat()
+    success = _sb_patch(
+        "claim_appeals",
+        filters={"id": f"eq.{req.appeal_id}"},
+        payload={
+            "status": appeal_status,
+            "reviewer": req.reviewer,
+            "resolution_note": req.note,
+            "resolved_at": resolved_at,
+        },
+    )
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to resolve appeal")
+
+    appeal_rows = _sb_get(
+        "claim_appeals",
+        params={
+            "select": "id,claim_public_id,claim_row_id,status",
+            "id": f"eq.{req.appeal_id}",
+            "limit": "1",
+        },
+    )
+    if not appeal_rows:
+        raise HTTPException(status_code=404, detail="Appeal not found")
+
+    claim_row_id = appeal_rows[0].get("claim_row_id")
+    claim_status = "processing" if action == "accept" else "rejected"
+    if claim_row_id:
+        _sb_patch(
+            "claims",
+            filters={"id": f"eq.{claim_row_id}"},
+            payload={
+                "status": claim_status,
+                "process_time": "appeal_review",
+            },
+        )
+        _sb_patch(
+            "fraud_logs",
+            filters={"claim_id": f"eq.{claim_row_id}"},
+            payload={
+                "status": "cleared" if action == "accept" else "blocked",
+                "resolved_by": req.reviewer,
+                "resolved_at": resolved_at,
+            },
+        )
+
+    return {
+        "appeal_id": req.appeal_id,
+        "claim_id": appeal_rows[0].get("claim_public_id"),
+        "action": action,
+        "status": appeal_status,
+        "claim_status": claim_status,
+        "resolved_by": req.reviewer,
+        "resolved_at": resolved_at,
     }
 
 

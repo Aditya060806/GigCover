@@ -421,6 +421,96 @@ export interface Database {
         };
         Relationships: [];
       };
+      incident_runs: {
+        Row: {
+          id: string;
+          city: string;
+          zone: string;
+          trigger_type: string;
+          mode: string;
+          workers_affected: number;
+          total_estimated_payout: number;
+          avg_payout_per_worker: number;
+          threshold_value: number;
+          measured_value: number;
+          trigger_event_id: string | null;
+          started_at: string;
+          completed_at: string | null;
+          duration_ms: number | null;
+        };
+        Insert: {
+          id?: string;
+          city: string;
+          zone: string;
+          trigger_type: string;
+          mode?: string;
+          workers_affected?: number;
+          total_estimated_payout?: number;
+          avg_payout_per_worker?: number;
+          threshold_value?: number;
+          measured_value?: number;
+          trigger_event_id?: string | null;
+          started_at?: string;
+          completed_at?: string | null;
+          duration_ms?: number | null;
+        };
+        Update: {
+          id?: string;
+          city?: string;
+          zone?: string;
+          trigger_type?: string;
+          mode?: string;
+          workers_affected?: number;
+          total_estimated_payout?: number;
+          avg_payout_per_worker?: number;
+          threshold_value?: number;
+          measured_value?: number;
+          trigger_event_id?: string | null;
+          started_at?: string;
+          completed_at?: string | null;
+          duration_ms?: number | null;
+        };
+        Relationships: [];
+      };
+      claim_appeals: {
+        Row: {
+          id: string;
+          claim_public_id: string;
+          claim_row_id: string;
+          worker_id: string;
+          reason: string;
+          status: string;
+          reviewer: string | null;
+          resolution_note: string | null;
+          submitted_at: string;
+          resolved_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          claim_public_id: string;
+          claim_row_id: string;
+          worker_id: string;
+          reason: string;
+          status?: string;
+          reviewer?: string | null;
+          resolution_note?: string | null;
+          submitted_at?: string;
+          resolved_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          claim_public_id?: string;
+          claim_row_id?: string;
+          worker_id?: string;
+          reason?: string;
+          status?: string;
+          reviewer?: string | null;
+          resolution_note?: string | null;
+          submitted_at?: string;
+          resolved_at?: string | null;
+        };
+        Relationships: [];
+      };
       audit_log: {
         Row: {
           id: string;
@@ -568,6 +658,8 @@ export type Claim = Database["public"]["Tables"]["claims"]["Row"];
 export type Transaction = Database["public"]["Tables"]["transactions"]["Row"];
 export type FraudLog = Database["public"]["Tables"]["fraud_logs"]["Row"];
 export type TriggerEvent = Database["public"]["Tables"]["trigger_events"]["Row"];
+export type IncidentRun = Database["public"]["Tables"]["incident_runs"]["Row"];
+export type ClaimAppeal = Database["public"]["Tables"]["claim_appeals"]["Row"];
 export type AuditLog = Database["public"]["Tables"]["audit_log"]["Row"];
 
 // View types

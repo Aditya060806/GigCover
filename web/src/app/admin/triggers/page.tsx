@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Zap,
   CloudRain,
@@ -10,16 +10,35 @@ import {
   Play,
   MapPin,
   CheckCircle,
+  Clock3,
   Users,
   Loader2,
+  RotateCw,
+  Activity,
+  Sparkles,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatCurrency } from "@/lib/utils";
 import { CITIES, TRIGGER_THRESHOLDS } from "@/lib/constants";
+import { getRecentIncidents, runIncident } from "@/lib/api";
+import { supabase } from "@/lib/supabase";
 
-const recentTriggers = [
+interface RecentTriggerRow {
+  id: string;
+  type: string;
+  city: string;
+  zone: string;
+  value: string;
+  threshold: string;
+  workersAffected: number;
+  totalPayout: number;
+  timestamp: string;
+  status: "simulated" | "fired" | "completed";
+}
+
+const FALLBACK_RECENT_TRIGGERS: RecentTriggerRow[] = [
   {
     id: "TRG-089",
     type: "heavy_rain",
@@ -91,40 +110,304 @@ const triggerTypeConfig: Record<string, { icon: typeof CloudRain; color: string;
   curfew: { icon: AlertTriangle, color: "from-red-500 to-red-700", label: "Curfew" },
 };
 
+function formatTriggerValue(value: number, triggerType: string): string {
+  const unit = TRIGGER_THRESHOLDS[triggerType]?.unit ?? "";
+  if (unit === "AQI") return `AQI ${Math.round(value)}`;
+  if (unit === "alert") return "Manual alert";
+  return `${value}${unit}`;
+}
+
+function mapIncidentToRow(incident: {
+  id: string;
+  city: string;
+  zone: string;
+  trigger_type: string;
+  mode: "simulate" | "fire";
+  workers_affected: number;
+  total_estimated_payout: number;
+  threshold_value: number;
+  measured_value: number;
+  started_at: string;
+}): RecentTriggerRow {
+  const isFire = incident.mode === "fire";
+  return {
+    id: `TRG-${incident.id.slice(0, 6).toUpperCase()}`,
+    type: incident.trigger_type,
+    city: incident.city,
+    zone: incident.zone,
+    value: formatTriggerValue(incident.measured_value, incident.trigger_type),
+    threshold: formatTriggerValue(incident.threshold_value, incident.trigger_type),
+    workersAffected: incident.workers_affected,
+    totalPayout: Number(incident.total_estimated_payout),
+    timestamp: new Date(incident.started_at).toLocaleString("en-IN", {
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }),
+    status: isFire ? "fired" : "simulated",
+  };
+}
+
 export default function AdminTriggers() {
   const [selectedCity, setSelectedCity] = useState("Mumbai");
+  const [selectedZone, setSelectedZone] = useState(
+    CITIES.find((c) => c.name === "Mumbai")?.zones[0]?.name ?? ""
+  );
   const [manualType, setManualType] = useState<string>("heavy_rain");
   const [isSimulating, setIsSimulating] = useState(false);
+  const [activeMode, setActiveMode] = useState<"simulate" | "fire">("simulate");
+  const [runError, setRunError] = useState<string | null>(null);
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  const [manualRefreshing, setManualRefreshing] = useState(false);
+  const [recentTriggerRows, setRecentTriggerRows] = useState<RecentTriggerRow[]>(
+    FALLBACK_RECENT_TRIGGERS
+  );
   const [simResult, setSimResult] = useState<{
     workers: number;
     payout: number;
+    mode: "simulate" | "fire";
+    triggerValue: string;
+    thresholdValue: string;
+    durationMs: number;
   } | null>(null);
 
-  const handleSimulate = () => {
+  const loadRecentIncidents = useCallback(async () => {
+    try {
+      const incidents = await getRecentIncidents(8);
+      if (!incidents.length) return;
+      setRecentTriggerRows(incidents.map(mapIncidentToRow));
+      setLastSyncAt(new Date().toISOString());
+    } catch {
+      // Keep fallback rows when API is unavailable.
+    }
+  }, []);
+
+  const handleManualRefresh = useCallback(async () => {
+    setManualRefreshing(true);
+    try {
+      await loadRecentIncidents();
+    } finally {
+      setManualRefreshing(false);
+    }
+  }, [loadRecentIncidents]);
+
+  useEffect(() => {
+    const cityConfig = CITIES.find((c) => c.name === selectedCity);
+    setSelectedZone(cityConfig?.zones[0]?.name ?? "");
+  }, [selectedCity]);
+
+  useEffect(() => {
+    void loadRecentIncidents();
+    const intervalId = window.setInterval(() => {
+      void loadRecentIncidents();
+    }, 20000);
+    return () => window.clearInterval(intervalId);
+  }, [loadRecentIncidents]);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel("incident-runs-admin-triggers")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "incident_runs",
+        },
+        () => {
+          void loadRecentIncidents();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [loadRecentIncidents]);
+
+  const handleRun = async (mode: "simulate" | "fire") => {
+    setActiveMode(mode);
     setIsSimulating(true);
     setSimResult(null);
-    setTimeout(() => {
-      setSimResult({
-        workers: Math.floor(Math.random() * 300) + 100,
-        payout: Math.floor(Math.random() * 300000) + 50000,
+    setRunError(null);
+
+    try {
+      const result = await runIncident({
+        city: selectedCity,
+        zone: selectedZone,
+        trigger_type: manualType,
+        mode,
       });
+
+      const thresholdLabel = formatTriggerValue(result.threshold_value, manualType);
+      const measuredLabel = formatTriggerValue(result.measured_value, manualType);
+
+      setSimResult({
+        workers: result.workers_affected,
+        payout: result.total_estimated_payout,
+        mode,
+        triggerValue: measuredLabel,
+        thresholdValue: thresholdLabel,
+        durationMs: result.duration_ms,
+      });
+
+      const recentRow: RecentTriggerRow = {
+        id: result.trigger_event_id
+          ? `TRG-${result.trigger_event_id.slice(0, 6).toUpperCase()}`
+          : `SIM-${Date.now().toString().slice(-6)}`,
+        type: manualType,
+        city: selectedCity,
+        zone: selectedZone,
+        value: measuredLabel,
+        threshold: thresholdLabel,
+        workersAffected: result.workers_affected,
+        totalPayout: result.total_estimated_payout,
+        timestamp: new Date().toLocaleString("en-IN", {
+          year: "numeric",
+          month: "short",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+        status: mode === "fire" ? "fired" : "simulated",
+      };
+      setRecentTriggerRows((prev) => [recentRow, ...prev].slice(0, 8));
+      void loadRecentIncidents();
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : "Unable to run trigger right now.");
+    } finally {
       setIsSimulating(false);
-    }, 2000);
+    }
   };
+
+  const totalExposure = recentTriggerRows.reduce((sum, row) => sum + row.totalPayout, 0);
+  const totalWorkersImpacted = recentTriggerRows.reduce((sum, row) => sum + row.workersAffected, 0);
+  const firedCount = recentTriggerRows.filter((row) => row.status === "fired").length;
+  const simulatedCount = recentTriggerRows.filter((row) => row.status === "simulated").length;
+  const averagePayout = recentTriggerRows.length > 0 ? totalExposure / recentTriggerRows.length : 0;
+  const topCityEntry = Object.entries(
+    recentTriggerRows.reduce<Record<string, number>>((acc, row) => {
+      acc[row.city] = (acc[row.city] ?? 0) + 1;
+      return acc;
+    }, {})
+  ).sort((a, b) => b[1] - a[1])[0];
+  const topCity = topCityEntry?.[0] ?? "N/A";
+  const opsPulse = [
+    `${firedCount} triggers were manually fired while ${simulatedCount} runs were dry-tested by ops teams.`,
+    `${totalWorkersImpacted.toLocaleString("en-IN")} workers were impacted across recent incidents with ${formatCurrency(totalExposure)} in projected payouts.`,
+    `${topCity} is currently the highest activity city with average trigger exposure of ${formatCurrency(averagePayout)} per run.`,
+  ];
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold">Parametric Trigger Panel</h2>
+          <h2 className="text-xl font-bold">Parametric Trigger Control Room</h2>
           <p className="text-sm text-muted-foreground">
-            Monitor, simulate, and manually fire parametric insurance triggers
+            Monitor, rehearse, and deploy trigger responses with live exposure visibility
           </p>
         </div>
-        <Badge variant="outline" className="gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          Trigger Engine Active
-        </Badge>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5"
+            onClick={() => {
+              void handleManualRefresh();
+            }}
+            disabled={manualRefreshing}
+          >
+            {manualRefreshing ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Syncing
+              </>
+            ) : (
+              <>
+                <RotateCw className="h-3.5 w-3.5" />
+                Refresh
+              </>
+            )}
+          </Button>
+          <Badge variant="outline" className="gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            Trigger Engine Active
+          </Badge>
+          {lastSyncAt && (
+            <Badge variant="secondary" className="text-[10px] gap-1">
+              <Clock3 className="w-3 h-3" />
+              Synced {new Date(lastSyncAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-teal-200 bg-gradient-to-r from-teal-50 via-cyan-50 to-sky-50 p-4">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 rounded-lg bg-white/80 p-2 text-teal-700 border border-teal-200">
+            <Activity className="h-4 w-4" />
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-sm font-semibold text-slate-900">Trigger Ops Pulse</p>
+            {opsPulse.map((line) => (
+              <p key={line} className="text-xs text-slate-700">
+                {line}
+              </p>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <Card className="border-slate-200 bg-white/90">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground">Workers Impacted</p>
+              <Users className="h-3.5 w-3.5 text-slate-500" />
+            </div>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">
+              {totalWorkersImpacted.toLocaleString("en-IN")}
+            </p>
+            <p className="text-[11px] text-muted-foreground mt-1">Across the latest 8 runs</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-slate-200 bg-white/90">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground">Projected Exposure</p>
+              <Sparkles className="h-3.5 w-3.5 text-teal-600" />
+            </div>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">{formatCurrency(totalExposure)}</p>
+            <p className="text-[11px] text-muted-foreground mt-1">Avg {formatCurrency(averagePayout)} per incident</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-slate-200 bg-white/90">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground">Execution Mix</p>
+              <Zap className="h-3.5 w-3.5 text-amber-600" />
+            </div>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">
+              {firedCount} / {simulatedCount}
+            </p>
+            <p className="text-[11px] text-muted-foreground mt-1">Fired vs Simulated</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-slate-200 bg-white/90">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground">Most Active City</p>
+              <MapPin className="h-3.5 w-3.5 text-rose-500" />
+            </div>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">{topCity}</p>
+            <p className="text-[11px] text-muted-foreground mt-1">Highest trigger run volume</p>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Threshold Config */}
@@ -169,7 +452,7 @@ export default function AdminTriggers() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-4">
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">City</label>
               <select
@@ -180,6 +463,20 @@ export default function AdminTriggers() {
                 {CITIES.map((c) => (
                   <option key={c.name} value={c.name}>
                     {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Zone</label>
+              <select
+                className="w-full h-9 rounded-lg bg-white border border-slate-200 px-3 text-sm focus:outline-none focus:ring-1 focus:ring-teal-500"
+                value={selectedZone}
+                onChange={(e) => setSelectedZone(e.target.value)}
+              >
+                {(CITIES.find((c) => c.name === selectedCity)?.zones ?? []).map((zone) => (
+                  <option key={zone.id} value={zone.name}>
+                    {zone.name}
                   </option>
                 ))}
               </select>
@@ -202,13 +499,13 @@ export default function AdminTriggers() {
               <Button
                 variant="default"
                 className="flex-1 gap-2"
-                onClick={handleSimulate}
+                onClick={() => handleRun("simulate")}
                 disabled={isSimulating}
               >
                 {isSimulating ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    Simulating...
+                    {activeMode === "fire" ? "Firing..." : "Simulating..."}
                   </>
                 ) : (
                   <>
@@ -217,20 +514,33 @@ export default function AdminTriggers() {
                   </>
                 )}
               </Button>
-              <Button variant="destructive" className="gap-2">
+              <Button
+                variant="destructive"
+                className="gap-2"
+                disabled={isSimulating}
+                onClick={() => handleRun("fire")}
+              >
                 <Zap className="w-4 h-4" />
                 Fire
               </Button>
             </div>
           </div>
 
+          {runError && (
+            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              {runError}
+            </div>
+          )}
+
           {simResult && (
             <div className="mt-4 p-4 rounded-lg bg-emerald-50 border border-emerald-200">
               <div className="flex items-center gap-2 mb-2">
                 <CheckCircle className="w-4 h-4 text-emerald-600" />
-                <span className="text-sm font-medium text-emerald-600">Simulation Complete</span>
+                <span className="text-sm font-medium text-emerald-600">
+                  {simResult.mode === "fire" ? "Trigger Fired" : "Simulation Complete"}
+                </span>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 <div>
                   <p className="text-xs text-muted-foreground">Workers Affected</p>
                   <p className="text-lg font-bold">{simResult.workers}</p>
@@ -239,7 +549,18 @@ export default function AdminTriggers() {
                   <p className="text-xs text-muted-foreground">Estimated Payout</p>
                   <p className="text-lg font-bold">{formatCurrency(simResult.payout)}</p>
                 </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Measured</p>
+                  <p className="text-sm font-semibold">{simResult.triggerValue}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Latency</p>
+                  <p className="text-sm font-semibold">{simResult.durationMs} ms</p>
+                </div>
               </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Threshold: {simResult.thresholdValue}
+              </p>
             </div>
           )}
         </CardContent>
@@ -256,8 +577,8 @@ export default function AdminTriggers() {
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          {recentTriggers.map((trigger) => {
-            const tc = triggerTypeConfig[trigger.type];
+          {recentTriggerRows.map((trigger) => {
+            const tc = triggerTypeConfig[trigger.type] ?? triggerTypeConfig.heavy_rain;
             return (
               <div
                 key={trigger.id}
@@ -278,6 +599,7 @@ export default function AdminTriggers() {
                     </span>
                     <span>{trigger.value} (threshold: {trigger.threshold})</span>
                   </div>
+                  <p className="text-[11px] text-muted-foreground mt-1">{trigger.timestamp}</p>
                 </div>
                 <div className="text-right shrink-0">
                   <div className="flex items-center gap-3 text-sm">
@@ -288,9 +610,16 @@ export default function AdminTriggers() {
                       </div>
                       <p className="font-bold">{formatCurrency(trigger.totalPayout)}</p>
                     </div>
-                    <Badge variant="success" className="text-[10px]">
+                    <Badge
+                      variant={trigger.status === "fired" ? "destructive" : "success"}
+                      className="text-[10px]"
+                    >
                       <CheckCircle className="w-2.5 h-2.5 mr-1" />
-                      Done
+                      {trigger.status === "fired"
+                        ? "Fired"
+                        : trigger.status === "completed"
+                        ? "Done"
+                        : "Sim"}
                     </Badge>
                   </div>
                 </div>

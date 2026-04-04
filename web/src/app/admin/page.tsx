@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Users,
   FileText,
@@ -11,6 +11,9 @@ import {
   IndianRupee,
   Activity,
   ShieldAlert,
+  RotateCw,
+  Clock3,
+  Loader2,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +37,7 @@ import {
   fetchClaimsByTriggerType,
   fetchRecentClaims,
 } from "@/lib/data";
+import { supabase } from "@/lib/supabase";
 import type { DashboardKPIs } from "@/types/database";
 
 // Fallback data for when Supabase is empty / unavailable
@@ -108,13 +112,16 @@ export default function AdminOverview() {
   >([]);
   const [loading, setLoading] = useState(true);
   const [chartsReady, setChartsReady] = useState(false);
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  const [manualRefreshing, setManualRefreshing] = useState(false);
+  const realtimeRefreshTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     setChartsReady(true);
   }, []);
 
-  useEffect(() => {
-    (async () => {
+  const loadOverview = useCallback(async () => {
+    try {
       const [kpiData, cityData, trigData, claimsData] = await Promise.all([
         fetchDashboardKPIs(),
         fetchWorkersByCity(),
@@ -135,38 +142,35 @@ export default function AdminOverview() {
       }
 
       if (trigData.length > 0) {
-        const total = trigData.reduce((s, t) => s + t.count, 0) || 1;
+        const total = trigData.reduce((sum, trigger) => sum + trigger.count, 0) || 1;
         setTopTriggers(
-          trigData.slice(0, 5).map((t) => ({
-            type: TRIGGER_LABELS[t.type] ?? t.type,
-            count: t.count,
-            pct: Math.round((t.count / total) * 100),
+          trigData.slice(0, 5).map((trigger) => ({
+            type: TRIGGER_LABELS[trigger.type] ?? trigger.type,
+            count: trigger.count,
+            pct: Math.round((trigger.count / total) * 100),
           }))
         );
       }
 
       if (claimsData.length > 0) {
         setRecentAlerts(
-          claimsData.slice(0, 5).map((c, i) => ({
-            id: i + 1,
-            type: c.fraud_score > 0.5 ? "fraud" : "trigger",
+          claimsData.slice(0, 5).map((claim, index) => ({
+            id: index + 1,
+            type: claim.fraud_score > 0.5 ? "fraud" : "trigger",
             message:
-              c.fraud_score > 0.5
-                ? `Suspicious claim — ${c.worker_name} (score ${c.fraud_score.toFixed(2)})`
-                : `${TRIGGER_LABELS[c.trigger_type] ?? c.trigger_type} trigger — ${c.city}, ${c.zone}`,
-            time: timeAgo(c.created_at),
+              claim.fraud_score > 0.5
+                ? `Suspicious claim — ${claim.worker_name} (score ${claim.fraud_score.toFixed(2)})`
+                : `${TRIGGER_LABELS[claim.trigger_type] ?? claim.trigger_type} trigger — ${claim.city}, ${claim.zone}`,
+            time: timeAgo(claim.created_at),
             severity:
-              c.fraud_score > 0.8
+              claim.fraud_score > 0.8
                 ? "critical"
-                : c.fraud_score > 0.5
+                : claim.fraud_score > 0.5
                 ? "high"
                 : "medium",
           }))
         );
-      }
-
-      // If no alerts came from DB, use static fallback
-      if (claimsData.length === 0 && recentAlerts.length === 0) {
+      } else {
         setRecentAlerts([
           { id: 1, type: "trigger", message: "Heavy rain trigger — Mumbai, Andheri West", time: "2 min ago", severity: "high" },
           { id: 2, type: "fraud", message: "Suspicious claim pattern — Worker #8847", time: "15 min ago", severity: "critical" },
@@ -175,10 +179,74 @@ export default function AdminOverview() {
           { id: 5, type: "trigger", message: "Heatwave alert — Chennai, T. Nagar", time: "2 hr ago", severity: "high" },
         ]);
       }
+
+      setLastSyncAt(new Date().toISOString());
+    } finally {
       setLoading(false);
-    })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    }
   }, []);
+
+  const scheduleRealtimeRefresh = useCallback(() => {
+    if (realtimeRefreshTimerRef.current !== null) {
+      window.clearTimeout(realtimeRefreshTimerRef.current);
+    }
+    realtimeRefreshTimerRef.current = window.setTimeout(() => {
+      realtimeRefreshTimerRef.current = null;
+      void loadOverview();
+    }, 550);
+  }, [loadOverview]);
+
+  const handleManualRefresh = useCallback(async () => {
+    setManualRefreshing(true);
+    try {
+      await loadOverview();
+    } finally {
+      setManualRefreshing(false);
+    }
+  }, [loadOverview]);
+
+  useEffect(() => {
+    void loadOverview();
+    const intervalId = window.setInterval(() => {
+      void loadOverview();
+    }, 30000);
+
+    return () => window.clearInterval(intervalId);
+  }, [loadOverview]);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel("admin-overview-live")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "claims" },
+        scheduleRealtimeRefresh
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "gig_workers" },
+        scheduleRealtimeRefresh
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "fraud_logs" },
+        scheduleRealtimeRefresh
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "trigger_events" },
+        scheduleRealtimeRefresh
+      )
+      .subscribe();
+
+    return () => {
+      if (realtimeRefreshTimerRef.current !== null) {
+        window.clearTimeout(realtimeRefreshTimerRef.current);
+        realtimeRefreshTimerRef.current = null;
+      }
+      void supabase.removeChannel(channel);
+    };
+  }, [scheduleRealtimeRefresh]);
 
   const stats = [
     {
@@ -230,8 +298,80 @@ export default function AdminOverview() {
       color: "from-red-500 to-red-600",
     },
   ];
+
+  const autoPayoutRate = kpis.total_claims > 0 ? (kpis.auto_payouts / kpis.total_claims) * 100 : 0;
+  const fraudFlagRate = kpis.total_claims > 0 ? (kpis.flagged_claims / kpis.total_claims) * 100 : 0;
+  const topTrigger = topTriggers[0]?.type ?? "No dominant trigger";
+  const severeAlerts = recentAlerts.filter(
+    (alert) => alert.severity === "critical" || alert.severity === "high"
+  ).length;
+
+  const opsPulse = [
+    `${kpis.active_workers.toLocaleString()} workers and ${kpis.active_policies.toLocaleString()} active policies are currently under coverage.` ,
+    `${autoPayoutRate.toFixed(1)}% of claims are auto-settled while fraud flag rate is ${fraudFlagRate.toFixed(1)}% across the active period.`,
+    `${severeAlerts} high-severity alerts are active right now; ${topTrigger} remains the dominant trigger category this cycle.`,
+  ];
+
   return (
     <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold">Operations Command Deck</h2>
+          <p className="text-sm text-muted-foreground">
+            Unified live snapshot of worker coverage, claims velocity, and fraud posture
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5"
+            onClick={() => {
+              void handleManualRefresh();
+            }}
+            disabled={manualRefreshing}
+          >
+            {manualRefreshing ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Syncing
+              </>
+            ) : (
+              <>
+                <RotateCw className="w-3.5 h-3.5" />
+                Refresh
+              </>
+            )}
+          </Button>
+          <Badge variant="outline" className="gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            Live Ops
+          </Badge>
+          {lastSyncAt && (
+            <Badge variant="secondary" className="text-[10px] gap-1">
+              <Clock3 className="w-3 h-3" />
+              Synced {new Date(lastSyncAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-cyan-200 bg-gradient-to-r from-cyan-50 via-sky-50 to-indigo-50 p-4">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 rounded-lg bg-white/80 p-2 text-cyan-700 border border-cyan-200">
+            <Activity className="h-4 w-4" />
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-sm font-semibold text-slate-900">Operations Pulse</p>
+            {opsPulse.map((line) => (
+              <p key={line} className="text-xs text-slate-700">
+                {line}
+              </p>
+            ))}
+          </div>
+        </div>
+      </div>
+
       {loading ? (
         <div className="space-y-6 animate-pulse">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">

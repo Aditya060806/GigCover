@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Shield,
   TrendingUp,
@@ -14,6 +14,10 @@ import {
   Clock,
   CheckCircle2,
   Eye,
+  RotateCw,
+  Loader2,
+  Activity,
+  Clock3,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +33,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { supabase } from "@/lib/supabase";
+import { formatCurrency } from "@/lib/utils";
 import type { GigWorker, Claim, WeatherEvent } from "@/types/database";
 
 const TRIGGER_LABELS: Record<string, string> = {
@@ -128,14 +133,16 @@ export default function DashboardPage() {
   ]);
   const [loading, setLoading] = useState(true);
   const [chartsReady, setChartsReady] = useState(false);
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  const [manualRefreshing, setManualRefreshing] = useState(false);
+  const realtimeRefreshTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     setChartsReady(true);
   }, []);
 
-  useEffect(() => {
-    (async () => {
-      // Fetch a sample worker for the demo dashboard
+  const loadDashboard = useCallback(async () => {
+    try {
       const { data: workers } = await supabase
         .from("gig_workers")
         .select("*")
@@ -144,23 +151,22 @@ export default function DashboardPage() {
         .returns<GigWorker[]>();
 
       if (workers && workers.length > 0) {
-        const w = workers[0];
-        const firstName = w.name.split(" ")[0];
+        const worker = workers[0];
+        const firstName = worker.name.split(" ")[0];
 
-        // Fetch claims and weather in parallel
         const [claimsResult, weatherResult] = await Promise.all([
           supabase
             .from("claims")
             .select("*")
-            .eq("worker_id", w.id)
+            .eq("worker_id", worker.id)
             .order("created_at", { ascending: false })
             .limit(5)
             .returns<Claim[]>(),
           supabase
             .from("weather_events")
             .select("*")
-            .eq("city", w.city)
-            .eq("zone", w.zone)
+            .eq("city", worker.city)
+            .eq("zone", worker.zone)
             .order("recorded_at", { ascending: false })
             .limit(1)
             .returns<WeatherEvent[]>(),
@@ -169,65 +175,211 @@ export default function DashboardPage() {
         const claims = claimsResult.data;
         const weather = weatherResult.data;
         const thisMonth = claims?.length ?? 0;
-        const autoCount = claims?.filter((c) => c.auto_triggered).length ?? 0;
+        const autoCount = claims?.filter((claim) => claim.auto_triggered).length ?? 0;
 
         setStats({
-          walletBalance: Number(w.total_earnings) - Number(w.total_payouts),
-          incomeProtected: Number(w.max_payout) * thisMonth,
-          totalPayouts: Number(w.total_payouts),
+          walletBalance: Number(worker.total_earnings) - Number(worker.total_payouts),
+          incomeProtected: Number(worker.max_payout) * thisMonth,
+          totalPayouts: Number(worker.total_payouts),
           claimsThisMonth: thisMonth,
           autoTriggered: autoCount,
           workerName: firstName,
-          zone: w.zone,
-          city: w.city,
-          plan: w.plan.charAt(0).toUpperCase() + w.plan.slice(1) + " Shield",
-          maxPayout: Number(w.max_payout),
-          weeklyPremium: Number(w.weekly_premium),
+          zone: worker.zone,
+          city: worker.city,
+          plan: worker.plan.charAt(0).toUpperCase() + worker.plan.slice(1) + " Shield",
+          maxPayout: Number(worker.max_payout),
+          weeklyPremium: Number(worker.weekly_premium),
         });
 
         if (claims && claims.length > 0) {
           setRecentClaims(
-            claims.slice(0, 3).map((c) => ({
-              id: c.claim_id,
-              type: TRIGGER_LABELS[c.trigger_type] ?? c.trigger_type,
-              icon: TRIGGER_ICONS[c.trigger_type] ?? "⚡",
-              amount: Number(c.amount),
-              status: c.status,
-              time: timeAgo(c.created_at),
-              triggerValue: c.trigger_type,
+            claims.slice(0, 3).map((claim) => ({
+              id: claim.claim_id,
+              type: TRIGGER_LABELS[claim.trigger_type] ?? claim.trigger_type,
+              icon: TRIGGER_ICONS[claim.trigger_type] ?? "⚡",
+              amount: Number(claim.amount),
+              status: claim.status,
+              time: timeAgo(claim.created_at),
+              triggerValue: claim.trigger_type,
             }))
           );
         }
 
         if (weather && weather.length > 0) {
-          const we = weather[0];
+          const weatherEvent = weather[0];
           setWeatherAlerts([
             {
-              type: we.rainfall_mm > 15 ? "Heavy Rain" : "Rainfall",
+              type: weatherEvent.rainfall_mm > 15 ? "Heavy Rain" : "Rainfall",
               icon: CloudRain,
-              value: `${we.rainfall_mm.toFixed(1)}mm/hr`,
-              severity: we.rainfall_mm > 30 ? "warning" as const : we.rainfall_mm > 15 ? "moderate" as const : "safe" as const,
+              value: `${weatherEvent.rainfall_mm.toFixed(1)}mm/hr`,
+              severity: weatherEvent.rainfall_mm > 30 ? "warning" as const : weatherEvent.rainfall_mm > 15 ? "moderate" as const : "safe" as const,
             },
             {
               type: "Air Quality",
               icon: Wind,
-              value: `AQI ${we.aqi}`,
-              severity: we.aqi > 300 ? "warning" as const : we.aqi > 200 ? "moderate" as const : "safe" as const,
+              value: `AQI ${weatherEvent.aqi}`,
+              severity: weatherEvent.aqi > 300 ? "warning" as const : weatherEvent.aqi > 200 ? "moderate" as const : "safe" as const,
             },
             {
               type: "Temperature",
               icon: Thermometer,
-              value: `${we.temp_c.toFixed(1)}°C`,
-              severity: we.temp_c > 42 ? "warning" as const : we.temp_c > 38 ? "moderate" as const : "safe" as const,
+              value: `${weatherEvent.temp_c.toFixed(1)}°C`,
+              severity: weatherEvent.temp_c > 42 ? "warning" as const : weatherEvent.temp_c > 38 ? "moderate" as const : "safe" as const,
             },
           ]);
         }
       }
+
+      setLastSyncAt(new Date().toISOString());
+    } finally {
       setLoading(false);
-    })();
+    }
   }, []);
+
+  const scheduleRealtimeRefresh = useCallback(() => {
+    if (realtimeRefreshTimerRef.current !== null) {
+      window.clearTimeout(realtimeRefreshTimerRef.current);
+    }
+    realtimeRefreshTimerRef.current = window.setTimeout(() => {
+      realtimeRefreshTimerRef.current = null;
+      void loadDashboard();
+    }, 600);
+  }, [loadDashboard]);
+
+  const handleManualRefresh = useCallback(async () => {
+    setManualRefreshing(true);
+    try {
+      await loadDashboard();
+    } finally {
+      setManualRefreshing(false);
+    }
+  }, [loadDashboard]);
+
+  useEffect(() => {
+    void loadDashboard();
+    const intervalId = window.setInterval(() => {
+      void loadDashboard();
+    }, 25000);
+
+    return () => window.clearInterval(intervalId);
+  }, [loadDashboard]);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel("worker-dashboard-live")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "claims" },
+        scheduleRealtimeRefresh
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "weather_events" },
+        scheduleRealtimeRefresh
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "gig_workers" },
+        scheduleRealtimeRefresh
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "transactions" },
+        scheduleRealtimeRefresh
+      )
+      .subscribe();
+
+    return () => {
+      if (realtimeRefreshTimerRef.current !== null) {
+        window.clearTimeout(realtimeRefreshTimerRef.current);
+        realtimeRefreshTimerRef.current = null;
+      }
+      void supabase.removeChannel(channel);
+    };
+  }, [scheduleRealtimeRefresh]);
+
+  const protectionLevel =
+    stats.claimsThisMonth > 0
+      ? Math.min(95, Math.round((stats.autoTriggered / stats.claimsThisMonth) * 100 + 35))
+      : 75;
+
+  const nextPremiumDate = useMemo(
+    () =>
+      new Date(Date.now() + 6 * 24 * 60 * 60 * 1000).toLocaleDateString("en-IN", {
+        month: "short",
+        day: "numeric",
+      }),
+    []
+  );
+
+  const hasElevatedRisk = weatherAlerts.some((alert) => alert.severity === "warning");
+
+  const missionPulse = [
+    `${stats.claimsThisMonth} claims were recorded this cycle, with ${stats.autoTriggered} auto-triggered payouts processed without manual intervention.`,
+    `${formatCurrency(stats.totalPayouts)} has been protected in ${stats.zone}, ${stats.city}, while wallet reserve stands at ${formatCurrency(stats.walletBalance)}.`,
+    `Local weather posture is ${hasElevatedRisk ? "elevated" : "stable"} and mission protection currently tracks at ${protectionLevel}%.`,
+  ];
+
   return (
     <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold">Worker Mission Console</h2>
+          <p className="text-sm text-muted-foreground">
+            Real-time protection health, weather exposure, and payout readiness
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5"
+            onClick={() => {
+              void handleManualRefresh();
+            }}
+            disabled={manualRefreshing}
+          >
+            {manualRefreshing ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Syncing
+              </>
+            ) : (
+              <>
+                <RotateCw className="w-3.5 h-3.5" />
+                Refresh
+              </>
+            )}
+          </Button>
+          <Badge variant="outline" className="gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            Mission Live
+          </Badge>
+          {lastSyncAt && (
+            <Badge variant="secondary" className="text-[10px] gap-1">
+              <Clock3 className="w-3 h-3" />
+              Synced {new Date(lastSyncAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-teal-200 bg-gradient-to-r from-teal-50 via-cyan-50 to-emerald-50 p-4">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 rounded-lg bg-white/80 p-2 text-teal-700 border border-teal-200">
+            <Activity className="h-4 w-4" />
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-sm font-semibold text-slate-900">Mission Pulse</p>
+            {missionPulse.map((line) => (
+              <p key={line} className="text-xs text-slate-700">
+                {line}
+              </p>
+            ))}
+          </div>
+        </div>
+      </div>
+
       {loading ? (
         <div className="space-y-6 animate-pulse">
           <div className="rounded-xl bg-white border border-slate-200 p-6">
@@ -423,11 +575,11 @@ export default function DashboardPage() {
                       stroke="#0d9488"
                       strokeWidth="6"
                       strokeLinecap="round"
-                      strokeDasharray={`${75 * 2.76} ${100 * 2.76}`}
+                      strokeDasharray={`${protectionLevel * 2.76} ${100 * 2.76}`}
                     />
                   </svg>
                   <div className="text-center">
-                    <p className="text-2xl font-bold text-foreground">75%</p>
+                    <p className="text-2xl font-bold text-foreground">{protectionLevel}%</p>
                     <p className="text-[10px] text-muted-foreground">Protected</p>
                   </div>
                 </div>
@@ -435,11 +587,11 @@ export default function DashboardPage() {
               <div className="space-y-2">
                 <div className="flex justify-between text-xs">
                   <span className="text-muted-foreground">Coverage</span>
-                  <span className="text-foreground font-medium">₹{stats.maxPayout}/event</span>
+                  <span className="text-foreground font-medium">{formatCurrency(stats.maxPayout)}/event</span>
                 </div>
                 <div className="flex justify-between text-xs">
                   <span className="text-muted-foreground">Next Premium</span>
-                  <span className="text-foreground font-medium">₹{stats.weeklyPremium} on Mar 10</span>
+                  <span className="text-foreground font-medium">{formatCurrency(stats.weeklyPremium)} on {nextPremiumDate}</span>
                 </div>
                 <div className="flex justify-between text-xs">
                   <span className="text-muted-foreground">Plan</span>
@@ -527,7 +679,7 @@ export default function DashboardPage() {
                 </div>
                 <div className="text-right">
                   <p className="text-sm font-semibold text-emerald-600">
-                    +₹{claim.amount}
+                    +{formatCurrency(claim.amount)}
                   </p>
                   <p className="text-[10px] text-muted-foreground">Auto-triggered</p>
                 </div>

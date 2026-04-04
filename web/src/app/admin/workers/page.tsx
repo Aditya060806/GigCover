@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Users,
   Search,
@@ -8,6 +8,12 @@ import {
   AlertTriangle,
   Download,
   Eye,
+  RotateCw,
+  Activity,
+  UserCheck,
+  ShieldAlert,
+  Clock3,
+  Sparkles,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatCurrency } from "@/lib/utils";
 import { fetchWorkers } from "@/lib/data";
+import { supabase } from "@/lib/supabase";
 
 interface WorkerRow {
   id: string;
@@ -54,9 +61,13 @@ export default function AdminWorkers() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [loading, setLoading] = useState(true);
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  const [manualRefreshing, setManualRefreshing] = useState(false);
+  const realtimeRefreshTimerRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    fetchWorkers(200).then(({ workers: data, count }) => {
+  const loadWorkers = useCallback(async () => {
+    try {
+      const { workers: data, count } = await fetchWorkers(200);
       if (data.length > 0) {
         setWorkers(
           data.map((w) => ({
@@ -74,11 +85,70 @@ export default function AdminWorkers() {
             fraudFlags: w.fraud_flags,
           }))
         );
-        setTotalCount(count);
       }
+      setTotalCount(count);
+      setLastSyncAt(new Date().toISOString());
+    } finally {
       setLoading(false);
-    });
+    }
   }, []);
+
+  const scheduleRealtimeRefresh = useCallback(() => {
+    if (realtimeRefreshTimerRef.current !== null) {
+      window.clearTimeout(realtimeRefreshTimerRef.current);
+    }
+    realtimeRefreshTimerRef.current = window.setTimeout(() => {
+      realtimeRefreshTimerRef.current = null;
+      void loadWorkers();
+    }, 550);
+  }, [loadWorkers]);
+
+  const handleManualRefresh = useCallback(async () => {
+    setManualRefreshing(true);
+    try {
+      await loadWorkers();
+    } finally {
+      setManualRefreshing(false);
+    }
+  }, [loadWorkers]);
+
+  useEffect(() => {
+    void loadWorkers();
+    const intervalId = window.setInterval(() => {
+      void loadWorkers();
+    }, 25000);
+
+    return () => window.clearInterval(intervalId);
+  }, [loadWorkers]);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel("admin-workers-live")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "gig_workers" },
+        scheduleRealtimeRefresh
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "claims" },
+        scheduleRealtimeRefresh
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "fraud_logs" },
+        scheduleRealtimeRefresh
+      )
+      .subscribe();
+
+    return () => {
+      if (realtimeRefreshTimerRef.current !== null) {
+        window.clearTimeout(realtimeRefreshTimerRef.current);
+        realtimeRefreshTimerRef.current = null;
+      }
+      void supabase.removeChannel(channel);
+    };
+  }, [scheduleRealtimeRefresh]);
 
   const exportCSV = () => {
     const headers = ["ID", "Name", "Platform", "City", "Zone", "Plan", "Status", "Earnings", "Risk Score", "Fraud Flags"];
@@ -104,24 +174,140 @@ export default function AdminWorkers() {
     return matchSearch && matchStatus;
   });
 
+  const activeCount = workers.filter((w) => w.status === "active").length;
+  const suspendedCount = workers.filter((w) => w.status === "suspended").length;
+  const highRiskCount = workers.filter((w) => w.riskScore >= 0.7).length;
+  const flaggedCount = workers.filter((w) => w.fraudFlags > 0).length;
+  const avgEarnings = workers.length > 0
+    ? workers.reduce((sum, worker) => sum + worker.earnings, 0) / workers.length
+    : 0;
+  const topCityEntry = Object.entries(
+    workers.reduce<Record<string, number>>((acc, worker) => {
+      acc[worker.city] = (acc[worker.city] ?? 0) + 1;
+      return acc;
+    }, {})
+  ).sort((a, b) => b[1] - a[1])[0];
+  const topCity = topCityEntry?.[0] ?? "N/A";
+
+  const workforcePulse = [
+    `${activeCount.toLocaleString("en-IN")} workers are currently active while ${suspendedCount} accounts remain suspended for review.`,
+    `${highRiskCount} workers are above 70% risk score and ${flaggedCount} have fraud flags requiring close monitoring.`,
+    `${topCity} leads current workforce density with average earnings of ${formatCurrency(avgEarnings)} across the roster.`,
+  ];
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold">Worker Management</h2>
+          <h2 className="text-xl font-bold">Workforce Risk Command</h2>
           <p className="text-sm text-muted-foreground">
-            {totalCount.toLocaleString()} registered workers across 5 cities
+            Live workforce monitoring, risk controls, and registry operations
           </p>
         </div>
-        <Button variant="outline" size="sm" className="gap-2" onClick={exportCSV}>
-          <Download className="w-4 h-4" />
-          Export CSV
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => {
+              void handleManualRefresh();
+            }}
+            disabled={manualRefreshing}
+          >
+            {manualRefreshing ? (
+              <>
+                <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                Syncing
+              </>
+            ) : (
+              <>
+                <RotateCw className="w-3.5 h-3.5" />
+                Refresh
+              </>
+            )}
+          </Button>
+          <Button variant="outline" size="sm" className="gap-2" onClick={exportCSV}>
+            <Download className="w-4 h-4" />
+            Export CSV
+          </Button>
+          <Badge variant="outline" className="gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            Live Registry
+          </Badge>
+          {lastSyncAt && (
+            <Badge variant="secondary" className="text-[10px] gap-1">
+              <Clock3 className="w-3 h-3" />
+              Synced {new Date(lastSyncAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-cyan-200 bg-gradient-to-r from-cyan-50 via-sky-50 to-teal-50 p-4">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 rounded-lg bg-white/80 p-2 text-cyan-700 border border-cyan-200">
+            <Activity className="h-4 w-4" />
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-sm font-semibold text-slate-900">Workforce Ops Pulse</p>
+            {workforcePulse.map((line) => (
+              <p key={line} className="text-xs text-slate-700">
+                {line}
+              </p>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <Card className="border-slate-200 bg-white/95">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground">Registered Workers</p>
+              <Users className="w-3.5 h-3.5 text-slate-500" />
+            </div>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">{totalCount.toLocaleString("en-IN")}</p>
+            <p className="text-[11px] text-muted-foreground mt-1">Across active coverage cities</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-slate-200 bg-white/95">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground">Active Roster</p>
+              <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
+            </div>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">{activeCount.toLocaleString("en-IN")}</p>
+            <p className="text-[11px] text-muted-foreground mt-1">{suspendedCount} suspended profiles</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-slate-200 bg-white/95">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground">High-Risk Accounts</p>
+              <ShieldAlert className="w-3.5 h-3.5 text-red-500" />
+            </div>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">{highRiskCount}</p>
+            <p className="text-[11px] text-muted-foreground mt-1">{flaggedCount} with fraud flags</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-slate-200 bg-white/95">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground">Average Earnings</p>
+              <Sparkles className="w-3.5 h-3.5 text-cyan-600" />
+            </div>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">{formatCurrency(avgEarnings)}</p>
+            <p className="text-[11px] text-muted-foreground mt-1">Top density city: {topCity}</p>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Filters */}
-      <Card>
+      <Card className="border-slate-200 bg-white/95">
         <CardContent className="p-4">
           <div className="flex flex-col sm:flex-row gap-3">
             <div className="relative flex-1">
@@ -151,7 +337,7 @@ export default function AdminWorkers() {
       </Card>
 
       {/* Workers Table */}
-      <Card className="overflow-hidden">
+      <Card className="overflow-hidden border-slate-200 bg-white/95">
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>

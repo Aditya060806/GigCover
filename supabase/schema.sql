@@ -181,7 +181,43 @@ CREATE TABLE IF NOT EXISTS trigger_events (
 );
 
 -- ════════════════════════════════════════════════════════════
--- 9. AUDIT LOG  (tracks every state change for compliance)
+-- 9. INCIDENT RUNS (admin-triggered simulations and fire drills)
+-- ════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS incident_runs (
+  id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  city                  TEXT NOT NULL,
+  zone                  TEXT NOT NULL,
+  trigger_type          TEXT NOT NULL CHECK (trigger_type IN ('heavy_rain', 'flood', 'heatwave', 'aqi', 'storm', 'curfew')),
+  mode                  TEXT NOT NULL DEFAULT 'simulate' CHECK (mode IN ('simulate', 'fire')),
+  workers_affected      INTEGER NOT NULL DEFAULT 0,
+  total_estimated_payout NUMERIC(12,2) DEFAULT 0,
+  avg_payout_per_worker NUMERIC(10,2) DEFAULT 0,
+  threshold_value       DOUBLE PRECISION NOT NULL DEFAULT 0,
+  measured_value        DOUBLE PRECISION NOT NULL DEFAULT 0,
+  trigger_event_id      UUID REFERENCES trigger_events(id),
+  started_at            TIMESTAMPTZ DEFAULT NOW(),
+  completed_at          TIMESTAMPTZ,
+  duration_ms           INTEGER
+);
+
+-- ════════════════════════════════════════════════════════════
+-- 10. CLAIM APPEALS (worker review requests for fraud-flagged claims)
+-- ════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS claim_appeals (
+  id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  claim_public_id  TEXT NOT NULL REFERENCES claims(claim_id) ON DELETE CASCADE,
+  claim_row_id     UUID NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+  worker_id        UUID NOT NULL REFERENCES gig_workers(id) ON DELETE CASCADE,
+  reason           TEXT NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'submitted' CHECK (status IN ('submitted', 'under_review', 'accepted', 'rejected')),
+  reviewer         TEXT,
+  resolution_note  TEXT,
+  submitted_at     TIMESTAMPTZ DEFAULT NOW(),
+  resolved_at      TIMESTAMPTZ
+);
+
+-- ════════════════════════════════════════════════════════════
+-- 11. AUDIT LOG  (tracks every state change for compliance)
 -- ════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS audit_log (
   id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -199,49 +235,60 @@ CREATE TABLE IF NOT EXISTS audit_log (
 -- ════════════════════════════════════════════════════════════
 
 -- Workers
-CREATE INDEX idx_workers_city ON gig_workers(city);
-CREATE INDEX idx_workers_platform ON gig_workers(platform);
-CREATE INDEX idx_workers_status ON gig_workers(status);
-CREATE INDEX idx_workers_city_zone ON gig_workers(city, zone);
-CREATE INDEX idx_workers_risk ON gig_workers(risk_score DESC);
-CREATE INDEX idx_workers_created ON gig_workers(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workers_city ON gig_workers(city);
+CREATE INDEX IF NOT EXISTS idx_workers_platform ON gig_workers(platform);
+CREATE INDEX IF NOT EXISTS idx_workers_status ON gig_workers(status);
+CREATE INDEX IF NOT EXISTS idx_workers_city_zone ON gig_workers(city, zone);
+CREATE INDEX IF NOT EXISTS idx_workers_risk ON gig_workers(risk_score DESC);
+CREATE INDEX IF NOT EXISTS idx_workers_created ON gig_workers(created_at DESC);
 
 -- Policies
-CREATE INDEX idx_policies_worker ON policies(worker_id);
-CREATE INDEX idx_policies_status ON policies(status);
-CREATE INDEX idx_policies_coverage ON policies(coverage_start, coverage_end);
+CREATE INDEX IF NOT EXISTS idx_policies_worker ON policies(worker_id);
+CREATE INDEX IF NOT EXISTS idx_policies_status ON policies(status);
+CREATE INDEX IF NOT EXISTS idx_policies_coverage ON policies(coverage_start, coverage_end);
 
 -- Claims (heavily queried)
-CREATE INDEX idx_claims_worker ON claims(worker_id);
-CREATE INDEX idx_claims_status ON claims(status);
-CREATE INDEX idx_claims_trigger ON claims(trigger_type);
-CREATE INDEX idx_claims_city_zone ON claims(city, zone);
-CREATE INDEX idx_claims_created ON claims(created_at DESC);
-CREATE INDEX idx_claims_fraud ON claims(fraud_score DESC) WHERE fraud_score > 0.5;
+CREATE INDEX IF NOT EXISTS idx_claims_worker ON claims(worker_id);
+CREATE INDEX IF NOT EXISTS idx_claims_status ON claims(status);
+CREATE INDEX IF NOT EXISTS idx_claims_trigger ON claims(trigger_type);
+CREATE INDEX IF NOT EXISTS idx_claims_city_zone ON claims(city, zone);
+CREATE INDEX IF NOT EXISTS idx_claims_created ON claims(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_claims_fraud ON claims(fraud_score DESC) WHERE fraud_score > 0.5;
 
 -- Weather
-CREATE INDEX idx_weather_city_zone ON weather_events(city, zone);
-CREATE INDEX idx_weather_recorded ON weather_events(recorded_at DESC);
-CREATE INDEX idx_weather_extreme ON weather_events(city, zone, recorded_at DESC) WHERE is_extreme = TRUE;
+CREATE INDEX IF NOT EXISTS idx_weather_city_zone ON weather_events(city, zone);
+CREATE INDEX IF NOT EXISTS idx_weather_recorded ON weather_events(recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_weather_extreme ON weather_events(city, zone, recorded_at DESC) WHERE is_extreme = TRUE;
 
 -- Transactions
-CREATE INDEX idx_transactions_worker ON transactions(worker_id);
-CREATE INDEX idx_transactions_type ON transactions(type);
-CREATE INDEX idx_transactions_created ON transactions(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_transactions_worker ON transactions(worker_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(type);
+CREATE INDEX IF NOT EXISTS idx_transactions_created ON transactions(created_at DESC);
 
 -- Fraud
-CREATE INDEX idx_fraud_worker ON fraud_logs(worker_id);
-CREATE INDEX idx_fraud_status ON fraud_logs(status) WHERE status = 'investigating';
-CREATE INDEX idx_fraud_score ON fraud_logs(fraud_score DESC);
+CREATE INDEX IF NOT EXISTS idx_fraud_worker ON fraud_logs(worker_id);
+CREATE INDEX IF NOT EXISTS idx_fraud_status ON fraud_logs(status) WHERE status = 'investigating';
+CREATE INDEX IF NOT EXISTS idx_fraud_score ON fraud_logs(fraud_score DESC);
 
 -- Triggers
-CREATE INDEX idx_triggers_city ON trigger_events(city, zone);
-CREATE INDEX idx_triggers_type ON trigger_events(trigger_type);
-CREATE INDEX idx_triggers_time ON trigger_events(triggered_at DESC);
+CREATE INDEX IF NOT EXISTS idx_triggers_city ON trigger_events(city, zone);
+CREATE INDEX IF NOT EXISTS idx_triggers_type ON trigger_events(trigger_type);
+CREATE INDEX IF NOT EXISTS idx_triggers_time ON trigger_events(triggered_at DESC);
+
+-- Incident runs
+CREATE INDEX IF NOT EXISTS idx_incident_runs_city_zone ON incident_runs(city, zone);
+CREATE INDEX IF NOT EXISTS idx_incident_runs_started ON incident_runs(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_incident_runs_trigger ON incident_runs(trigger_type);
+
+-- Claim appeals
+CREATE INDEX IF NOT EXISTS idx_claim_appeals_claim_public ON claim_appeals(claim_public_id);
+CREATE INDEX IF NOT EXISTS idx_claim_appeals_status ON claim_appeals(status);
+CREATE INDEX IF NOT EXISTS idx_claim_appeals_worker ON claim_appeals(worker_id);
+CREATE INDEX IF NOT EXISTS idx_claim_appeals_submitted ON claim_appeals(submitted_at DESC);
 
 -- Audit
-CREATE INDEX idx_audit_table ON audit_log(table_name, record_id);
-CREATE INDEX idx_audit_time ON audit_log(changed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_table ON audit_log(table_name, record_id);
+CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_log(changed_at DESC);
 
 -- ════════════════════════════════════════════════════════════
 -- ROW LEVEL SECURITY
@@ -252,49 +299,79 @@ ALTER TABLE policies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE claims ENABLE ROW LEVEL SECURITY;
 ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE fraud_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE incident_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE claim_appeals ENABLE ROW LEVEL SECURITY;
 
 -- Workers see their own data
+DROP POLICY IF EXISTS "Workers read own data" ON gig_workers;
 CREATE POLICY "Workers read own data" ON gig_workers
   FOR SELECT USING (auth.uid() = auth_user_id);
 
+DROP POLICY IF EXISTS "Workers update own data" ON gig_workers;
 CREATE POLICY "Workers update own data" ON gig_workers
   FOR UPDATE USING (auth.uid() = auth_user_id)
   WITH CHECK (auth.uid() = auth_user_id);
 
+DROP POLICY IF EXISTS "Workers read own policies" ON policies;
 CREATE POLICY "Workers read own policies" ON policies
   FOR SELECT USING (
     worker_id IN (SELECT id FROM gig_workers WHERE auth_user_id = auth.uid())
   );
 
+DROP POLICY IF EXISTS "Workers read own claims" ON claims;
 CREATE POLICY "Workers read own claims" ON claims
   FOR SELECT USING (
     worker_id IN (SELECT id FROM gig_workers WHERE auth_user_id = auth.uid())
   );
 
+DROP POLICY IF EXISTS "Workers read own transactions" ON transactions;
 CREATE POLICY "Workers read own transactions" ON transactions
   FOR SELECT USING (
     worker_id IN (SELECT id FROM gig_workers WHERE auth_user_id = auth.uid())
   );
 
+DROP POLICY IF EXISTS "Workers read own appeals" ON claim_appeals;
+CREATE POLICY "Workers read own appeals" ON claim_appeals
+  FOR SELECT USING (
+    worker_id IN (SELECT id FROM gig_workers WHERE auth_user_id = auth.uid())
+  );
+
 -- Fraud logs: only admins (via service role) can see
+DROP POLICY IF EXISTS "Service role only for fraud logs" ON fraud_logs;
 CREATE POLICY "Service role only for fraud logs" ON fraud_logs
   FOR ALL USING (auth.role() = 'service_role');
 
 -- Public read for zones and weather (non-sensitive reference data)
+DROP POLICY IF EXISTS "Public read zones" ON zones;
 CREATE POLICY "Public read zones" ON zones FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Public read weather" ON weather_events;
 CREATE POLICY "Public read weather" ON weather_events FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Public read incident runs" ON incident_runs;
+CREATE POLICY "Public read incident runs" ON incident_runs FOR SELECT USING (true);
 
 -- Service role bypass for ML API writes (API uses service_role key)
+DROP POLICY IF EXISTS "Service role full access workers" ON gig_workers;
 CREATE POLICY "Service role full access workers" ON gig_workers
   FOR ALL USING (auth.role() = 'service_role');
 
+DROP POLICY IF EXISTS "Service role full access policies" ON policies;
 CREATE POLICY "Service role full access policies" ON policies
   FOR ALL USING (auth.role() = 'service_role');
 
+DROP POLICY IF EXISTS "Service role full access claims" ON claims;
 CREATE POLICY "Service role full access claims" ON claims
   FOR ALL USING (auth.role() = 'service_role');
 
+DROP POLICY IF EXISTS "Service role full access transactions" ON transactions;
 CREATE POLICY "Service role full access transactions" ON transactions
+  FOR ALL USING (auth.role() = 'service_role');
+
+DROP POLICY IF EXISTS "Service role full access claim appeals" ON claim_appeals;
+CREATE POLICY "Service role full access claim appeals" ON claim_appeals
+  FOR ALL USING (auth.role() = 'service_role');
+
+DROP POLICY IF EXISTS "Service role full access incident runs" ON incident_runs;
+CREATE POLICY "Service role full access incident runs" ON incident_runs
   FOR ALL USING (auth.role() = 'service_role');
 
 -- ════════════════════════════════════════════════════════════
@@ -310,6 +387,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS set_updated_at ON gig_workers;
 CREATE TRIGGER set_updated_at
   BEFORE UPDATE ON gig_workers
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
@@ -335,6 +413,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_claim_paid ON claims;
 CREATE TRIGGER trg_claim_paid
   AFTER INSERT OR UPDATE ON claims
   FOR EACH ROW EXECUTE FUNCTION on_claim_paid();
@@ -350,6 +429,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_fraud_suspend ON gig_workers;
 CREATE TRIGGER trg_fraud_suspend
   BEFORE UPDATE ON gig_workers
   FOR EACH ROW EXECUTE FUNCTION on_fraud_threshold();
@@ -381,6 +461,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_fraud_detect ON claims;
 CREATE TRIGGER trg_fraud_detect
   AFTER INSERT ON claims
   FOR EACH ROW EXECUTE FUNCTION on_claim_fraud_detected();
@@ -400,6 +481,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_audit_claims ON claims;
 CREATE TRIGGER trg_audit_claims
   AFTER INSERT OR UPDATE ON claims
   FOR EACH ROW EXECUTE FUNCTION audit_claims_changes();
