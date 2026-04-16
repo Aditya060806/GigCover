@@ -217,7 +217,24 @@ CREATE TABLE IF NOT EXISTS claim_appeals (
 );
 
 -- ════════════════════════════════════════════════════════════
--- 11. AUDIT LOG  (tracks every state change for compliance)
+-- 11. NOTIFICATIONS  (in-app alerts for workers)
+-- ════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS notifications (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  worker_id   UUID NOT NULL REFERENCES gig_workers(id) ON DELETE CASCADE,
+  type        TEXT NOT NULL CHECK (type IN ('trigger_fired', 'payout_credited', 'fraud_flagged', 'appeal_update', 'weather_alert')),
+  title       TEXT NOT NULL,
+  body        TEXT NOT NULL,
+  city        TEXT,
+  zone        TEXT,
+  amount      NUMERIC(10,2),
+  trigger_type TEXT,
+  read        BOOLEAN DEFAULT FALSE,
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ════════════════════════════════════════════════════════════
+-- 12. AUDIT LOG  (tracks every state change for compliance)
 -- ════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS audit_log (
   id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -286,6 +303,11 @@ CREATE INDEX IF NOT EXISTS idx_claim_appeals_status ON claim_appeals(status);
 CREATE INDEX IF NOT EXISTS idx_claim_appeals_worker ON claim_appeals(worker_id);
 CREATE INDEX IF NOT EXISTS idx_claim_appeals_submitted ON claim_appeals(submitted_at DESC);
 
+-- Notifications
+CREATE INDEX IF NOT EXISTS idx_notifications_worker ON notifications(worker_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(worker_id, read) WHERE read = FALSE;
+CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
+
 -- Audit
 CREATE INDEX IF NOT EXISTS idx_audit_table ON audit_log(table_name, record_id);
 CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_log(changed_at DESC);
@@ -301,6 +323,7 @@ ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE fraud_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE incident_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE claim_appeals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
 
 -- Workers see their own data
 DROP POLICY IF EXISTS "Workers read own data" ON gig_workers;
@@ -335,6 +358,23 @@ CREATE POLICY "Workers read own appeals" ON claim_appeals
   FOR SELECT USING (
     worker_id IN (SELECT id FROM gig_workers WHERE auth_user_id = auth.uid())
   );
+
+-- Notifications: workers see their own
+DROP POLICY IF EXISTS "Workers read own notifications" ON notifications;
+CREATE POLICY "Workers read own notifications" ON notifications
+  FOR SELECT USING (
+    worker_id IN (SELECT id FROM gig_workers WHERE auth_user_id = auth.uid())
+  );
+
+DROP POLICY IF EXISTS "Workers mark own notifications read" ON notifications;
+CREATE POLICY "Workers mark own notifications read" ON notifications
+  FOR UPDATE USING (
+    worker_id IN (SELECT id FROM gig_workers WHERE auth_user_id = auth.uid())
+  );
+
+DROP POLICY IF EXISTS "Service role full access notifications" ON notifications;
+CREATE POLICY "Service role full access notifications" ON notifications
+  FOR ALL USING (auth.role() = 'service_role');
 
 -- Fraud logs: only admins (via service role) can see
 DROP POLICY IF EXISTS "Service role only for fraud logs" ON fraud_logs;

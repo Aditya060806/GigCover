@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Shield,
   TrendingUp,
@@ -18,8 +19,11 @@ import {
   Loader2,
   Activity,
   Clock3,
+  IndianRupee,
+  X,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
@@ -34,6 +38,7 @@ import {
 } from "recharts";
 import { supabase } from "@/lib/supabase";
 import { formatCurrency } from "@/lib/utils";
+import { useGpsDeviation } from "@/hooks/useGpsDeviation";
 import type { GigWorker, Claim, WeatherEvent } from "@/types/database";
 
 const TRIGGER_LABELS: Record<string, string> = {
@@ -139,6 +144,16 @@ export default function DashboardPage() {
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const realtimeRefreshTimerRef = useRef<number | null>(null);
+  const [workerZone, setWorkerZone] = useState("");
+  const [workerCityState, setWorkerCityState] = useState("");
+  const [payoutBanner, setPayoutBanner] = useState<{
+    triggerType: string;
+    amount: number;
+    zone: string;
+    step: "incoming" | "processing" | "credited";
+  } | null>(null);
+  const payoutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gps = useGpsDeviation(workerZone || undefined, workerCityState || undefined);
 
   useEffect(() => {
     setChartsReady(true);
@@ -156,6 +171,8 @@ export default function DashboardPage() {
       if (workers && workers.length > 0) {
         const worker = workers[0];
         const firstName = worker.name.split(" ")[0];
+        setWorkerZone(worker.zone);
+        setWorkerCityState(worker.city);
 
         const [claimsResult, weatherResult] = await Promise.all([
           supabase
@@ -290,6 +307,26 @@ export default function DashboardPage() {
         { event: "*", schema: "public", table: "transactions" },
         scheduleRealtimeRefresh
       )
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "trigger_events" },
+        (payload) => {
+          const row = payload.new as { trigger_type: string; city: string; zone: string; total_payout: number };
+          if (row.city === workerCityState && row.zone === workerZone) {
+            const avgPayout = Math.round((row.total_payout || 0) / Math.max(1, 150));
+            setPayoutBanner({ triggerType: row.trigger_type, amount: avgPayout, zone: row.zone, step: "incoming" });
+            if (payoutTimerRef.current) clearTimeout(payoutTimerRef.current);
+            payoutTimerRef.current = setTimeout(() => {
+              setPayoutBanner((prev) => prev ? { ...prev, step: "processing" } : null);
+              payoutTimerRef.current = setTimeout(() => {
+                setPayoutBanner((prev) => prev ? { ...prev, step: "credited" } : null);
+                payoutTimerRef.current = setTimeout(() => setPayoutBanner(null), 6000);
+              }, 3000);
+            }, 2000);
+            scheduleRealtimeRefresh();
+          }
+        }
+      )
       .subscribe();
 
     return () => {
@@ -297,9 +334,10 @@ export default function DashboardPage() {
         window.clearTimeout(realtimeRefreshTimerRef.current);
         realtimeRefreshTimerRef.current = null;
       }
+      if (payoutTimerRef.current) clearTimeout(payoutTimerRef.current);
       void supabase.removeChannel(channel);
     };
-  }, [scheduleRealtimeRefresh]);
+  }, [scheduleRealtimeRefresh, workerZone, workerCityState]);
 
   const protectionLevel =
     stats.claimsThisMonth > 0
@@ -323,8 +361,93 @@ export default function DashboardPage() {
     `Local weather posture is ${hasElevatedRisk ? "elevated" : "stable"} and mission protection currently tracks at ${protectionLevel}%.`,
   ];
 
+  const TRIGGER_LABELS_BANNER: Record<string, string> = {
+    heavy_rain: "Heavy Rain 🌧️", flood: "Flood 🌊", heatwave: "Heatwave 🔥",
+    aqi: "AQI Hazardous 😷", storm: "Severe Storm 🌪️", curfew: "Curfew 🚨",
+  };
+
   return (
     <div className="space-y-6">
+      {/* Payout Animation Banner */}
+      <AnimatePresence>
+        {payoutBanner && (
+          <motion.div
+            key="payout-banner"
+            initial={{ opacity: 0, y: -20, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, scale: 0.97 }}
+            transition={{ type: "spring", stiffness: 300, damping: 25 }}
+            className={`relative overflow-hidden rounded-2xl border p-4 shadow-lg ${
+              payoutBanner.step === "credited"
+                ? "bg-gradient-to-r from-emerald-500 to-teal-500 border-emerald-400 text-white"
+                : payoutBanner.step === "processing"
+                ? "bg-gradient-to-r from-blue-500 to-indigo-500 border-blue-400 text-white"
+                : "bg-gradient-to-r from-amber-400 to-orange-500 border-amber-400 text-white"
+            }`}
+          >
+            <div className="flex items-center gap-4">
+              <motion.div
+                animate={{ rotate: payoutBanner.step === "processing" ? 360 : 0 }}
+                transition={{ repeat: payoutBanner.step === "processing" ? Infinity : 0, duration: 1, ease: "linear" }}
+                className="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center flex-shrink-0"
+              >
+                {payoutBanner.step === "credited" ? (
+                  <CheckCircle2 className="w-6 h-6 text-white" />
+                ) : payoutBanner.step === "processing" ? (
+                  <Loader2 className="w-6 h-6 text-white" />
+                ) : (
+                  <Zap className="w-6 h-6 text-white" />
+                )}
+              </motion.div>
+              <div className="flex-1">
+                <p className="font-bold text-base">
+                  {payoutBanner.step === "credited"
+                    ? "✅ Payout Credited to Wallet!"
+                    : payoutBanner.step === "processing"
+                    ? "⚡ Processing Your Payout..."
+                    : `🚨 Trigger Fired: ${TRIGGER_LABELS_BANNER[payoutBanner.triggerType] ?? payoutBanner.triggerType}`}
+                </p>
+                <p className="text-sm opacity-90">
+                  {payoutBanner.step === "credited"
+                    ? `₹${payoutBanner.amount.toLocaleString("en-IN")} has been added to your GigCover wallet`
+                    : payoutBanner.step === "processing"
+                    ? "Verifying trigger data · Running fraud check · Crediting wallet"
+                    : `A parametric event was detected in ${payoutBanner.zone} · Payout incoming`}
+                </p>
+              </div>
+              {payoutBanner.amount > 0 && (
+                <div className="text-right flex-shrink-0">
+                  <div className="flex items-center gap-1 text-2xl font-black">
+                    <IndianRupee className="w-5 h-5" />
+                    <motion.span
+                      key={payoutBanner.step}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                    >
+                      {payoutBanner.amount.toLocaleString("en-IN")}
+                    </motion.span>
+                  </div>
+                  <p className="text-xs opacity-75">est. payout</p>
+                </div>
+              )}
+              <button onClick={() => setPayoutBanner(null)} className="p-1 rounded-lg hover:bg-white/20 flex-shrink-0">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            {payoutBanner.step === "processing" && (
+              <div className="mt-3 h-1.5 bg-white/20 rounded-full overflow-hidden">
+                <motion.div
+                  className="h-full bg-white rounded-full"
+                  initial={{ width: "0%" }}
+                  animate={{ width: "100%" }}
+                  transition={{ duration: 3, ease: "linear" }}
+                />
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold">Worker Mission Console</h2>
@@ -384,33 +507,41 @@ export default function DashboardPage() {
       </div>
 
       {loading ? (
-        <div className="space-y-6 animate-pulse">
+        <div className="space-y-6">
           <div className="rounded-xl bg-white border border-slate-200 p-6">
-            <div className="h-6 bg-slate-200 rounded w-1/3 mb-2" />
-            <div className="h-4 bg-slate-200 rounded w-1/2" />
+            <Skeleton className="h-7 w-48 mb-2" />
+            <Skeleton className="h-4 w-72" />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="bg-white border border-slate-200 rounded-xl p-5">
-                <div className="h-10 w-10 bg-slate-200 rounded-lg mb-3" />
-                <div className="h-6 bg-slate-200 rounded w-1/2 mb-1" />
-                <div className="h-3 bg-slate-200 rounded w-2/3" />
-              </div>
+              <Card key={i} className="p-5">
+                <CardContent className="p-0">
+                  <Skeleton className="h-11 w-11 rounded-xl mb-3" />
+                  <Skeleton className="h-7 w-24 mb-1" />
+                  <Skeleton className="h-3 w-32" />
+                </CardContent>
+              </Card>
             ))}
           </div>
           <div className="grid lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl p-6">
-              <div className="h-[280px] bg-slate-100 rounded" />
-            </div>
+            <Card className="lg:col-span-2 p-6">
+              <CardContent className="p-0">
+                <Skeleton className="h-[280px] w-full rounded-lg" />
+              </CardContent>
+            </Card>
             <div className="space-y-6">
-              <div className="bg-white border border-slate-200 rounded-xl p-6">
-                <div className="h-32 bg-slate-100 rounded-full w-32 mx-auto" />
-              </div>
-              <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-3">
-                {Array.from({ length: 3 }).map((_, i) => (
-                  <div key={i} className="h-12 bg-slate-100 rounded-lg" />
-                ))}
-              </div>
+              <Card className="p-6">
+                <CardContent className="p-0 flex justify-center">
+                  <Skeleton className="h-32 w-32 rounded-full" />
+                </CardContent>
+              </Card>
+              <Card className="p-6 space-y-3">
+                <CardContent className="p-0 space-y-3">
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <Skeleton key={i} className="h-12 w-full rounded-lg" />
+                  ))}
+                </CardContent>
+              </Card>
             </div>
           </div>
         </div>
@@ -446,6 +577,7 @@ export default function DashboardPage() {
           icon={Wallet}
           iconBg="bg-teal-50"
           iconColor="text-teal-600"
+          delay={0}
         />
         <StatsCard
           title="Income Protected"
@@ -455,6 +587,7 @@ export default function DashboardPage() {
           icon={Shield}
           iconBg="bg-blue-50"
           iconColor="text-blue-600"
+          delay={0.08}
         />
         <StatsCard
           title="Total Payouts"
@@ -464,6 +597,7 @@ export default function DashboardPage() {
           icon={TrendingUp}
           iconBg="bg-emerald-50"
           iconColor="text-emerald-600"
+          delay={0.16}
         />
         <StatsCard
           title="Claims This Month"
@@ -473,6 +607,7 @@ export default function DashboardPage() {
           icon={Zap}
           iconBg="bg-amber-50"
           iconColor="text-amber-600"
+          delay={0.24}
         />
       </div>
 
@@ -648,6 +783,39 @@ export default function DashboardPage() {
                   </Badge>
                 </div>
               ))}
+
+              {/* GPS Location Status */}
+              {gps.status !== "idle" && (
+                <div className={`flex items-center gap-2.5 p-2.5 rounded-lg border text-xs ${
+                  gps.status === "fetching"
+                    ? "bg-slate-50 border-slate-200 text-muted-foreground"
+                    : gps.spoofingLikely
+                    ? "bg-red-50 border-red-200 text-red-700"
+                    : gps.status === "done"
+                    ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+                    : "bg-amber-50 border-amber-200 text-amber-700"
+                }`}>
+                  <span className="text-base">
+                    {gps.status === "fetching" ? "📡" : gps.spoofingLikely ? "🚨" : gps.status === "done" ? "📍" : "⚠️"}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium">
+                      {gps.status === "fetching"
+                        ? "Verifying location…"
+                        : gps.spoofingLikely
+                        ? `GPS anomaly — ${gps.deviationKm}km deviation`
+                        : gps.status === "done"
+                        ? `Location verified · ${gps.deviationKm}km from zone`
+                        : gps.error ?? "Location unavailable"}
+                    </p>
+                  </div>
+                  {gps.status === "done" && (
+                    <Badge variant={gps.spoofingLikely ? "destructive" : "success"} className="text-[10px] shrink-0">
+                      {gps.spoofingLikely ? "Check" : "OK"}
+                    </Badge>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -713,6 +881,7 @@ function StatsCard({
   icon: Icon,
   iconBg,
   iconColor,
+  delay = 0,
 }: {
   title: string;
   value: string;
@@ -721,35 +890,47 @@ function StatsCard({
   icon: React.ComponentType<{ className?: string }>;
   iconBg: string;
   iconColor: string;
+  delay?: number;
 }) {
   return (
-    <Card className="hover:border-slate-300 transition-all">
-      <CardContent className="p-5">
-        <div className="flex items-start justify-between mb-3">
-          <div className={`w-10 h-10 rounded-lg ${iconBg} flex items-center justify-center`}>
-            <Icon className={`w-5 h-5 ${iconColor}`} />
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, delay }}
+      whileHover={{ y: -3 }}
+    >
+      <Card className="border-slate-200 shadow-sm hover:shadow-md hover:border-teal-200 transition-all duration-300">
+        <CardContent className="p-5">
+          <div className="flex items-start justify-between mb-3">
+            <div className={`w-11 h-11 rounded-xl ${iconBg} flex items-center justify-center shadow-sm`}>
+              <Icon className={`w-5 h-5 ${iconColor}`} />
+            </div>
+            {changeType === "positive" && (
+              <span className="flex items-center gap-0.5 text-emerald-600 text-xs font-medium">
+                <ArrowUpRight className="w-3.5 h-3.5" />
+              </span>
+            )}
+            {changeType === "negative" && (
+              <span className="flex items-center gap-0.5 text-red-600 text-xs font-medium">
+                <ArrowDownRight className="w-3.5 h-3.5" />
+              </span>
+            )}
           </div>
-          {changeType === "positive" && (
-            <ArrowUpRight className="w-4 h-4 text-emerald-600" />
-          )}
-          {changeType === "negative" && (
-            <ArrowDownRight className="w-4 h-4 text-red-600" />
-          )}
-        </div>
-        <p className="text-2xl font-bold text-foreground mb-0.5">{value}</p>
-        <p
-          className={`text-xs ${
-            changeType === "positive"
-              ? "text-emerald-600"
-              : changeType === "negative"
-              ? "text-red-600"
-              : "text-muted-foreground"
-          }`}
-        >
-          {change}
-        </p>
-        <p className="text-xs text-muted-foreground mt-1">{title}</p>
-      </CardContent>
-    </Card>
+          <p className="text-2xl font-bold text-foreground mb-0.5 tabular-nums">{value}</p>
+          <p
+            className={`text-xs font-medium ${
+              changeType === "positive"
+                ? "text-emerald-600"
+                : changeType === "negative"
+                ? "text-red-600"
+                : "text-muted-foreground"
+            }`}
+          >
+            {change}
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">{title}</p>
+        </CardContent>
+      </Card>
+    </motion.div>
   );
 }

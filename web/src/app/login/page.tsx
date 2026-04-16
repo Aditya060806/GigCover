@@ -57,8 +57,10 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-slate-50 relative">
-      <div className="absolute inset-0 grid-pattern opacity-30" />
+    <div className="min-h-screen flex items-center justify-center p-4 gradient-mesh relative overflow-hidden">
+      <div className="absolute inset-0 grid-pattern opacity-20" />
+      <div className="absolute -top-32 -left-32 w-[500px] h-[500px] rounded-full bg-teal-400/8 blur-3xl pointer-events-none" />
+      <div className="absolute -bottom-20 -right-20 w-[400px] h-[400px] rounded-full bg-emerald-400/8 blur-3xl pointer-events-none" />
 
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -69,9 +71,14 @@ export default function LoginPage() {
         {/* Logo */}
         <div className="text-center mb-8">
           <Link href="/" className="inline-flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-xl bg-teal-600 flex items-center justify-center">
-              <Shield className="w-5 h-5 text-white" />
-            </div>
+            <motion.div
+              initial={{ scale: 0.8, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ duration: 0.4, delay: 0.1 }}
+              className="w-11 h-11 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-500 flex items-center justify-center shadow-lg"
+            >
+              <Shield className="w-6 h-6 text-white" />
+            </motion.div>
             <span className="text-2xl font-bold text-foreground">GigCover</span>
           </Link>
           <p className="text-sm text-muted-foreground mt-2">
@@ -79,7 +86,7 @@ export default function LoginPage() {
           </p>
         </div>
 
-        <Card className="shadow-lg border-slate-200">
+        <Card className="shadow-xl border-0 glass-card">
           <CardContent className="p-6">
             {/* Login Method Toggle */}
             <div className="flex p-1 rounded-lg bg-slate-100 mb-6">
@@ -191,10 +198,14 @@ export default function LoginPage() {
               </div>
 
               {error && (
-                <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                <motion.div
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2.5"
+                >
                   <AlertCircle className="w-4 h-4 shrink-0" />
                   {error}
-                </div>
+                </motion.div>
               )}
 
               <Button

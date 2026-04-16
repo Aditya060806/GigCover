@@ -472,6 +472,48 @@ export interface Database {
         };
         Relationships: [];
       };
+      notifications: {
+        Row: {
+          id: string;
+          worker_id: string;
+          type: string;
+          title: string;
+          body: string;
+          city: string | null;
+          zone: string | null;
+          amount: number | null;
+          trigger_type: string | null;
+          read: boolean;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          worker_id: string;
+          type: string;
+          title: string;
+          body: string;
+          city?: string | null;
+          zone?: string | null;
+          amount?: number | null;
+          trigger_type?: string | null;
+          read?: boolean;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          worker_id?: string;
+          type?: string;
+          title?: string;
+          body?: string;
+          city?: string | null;
+          zone?: string | null;
+          amount?: number | null;
+          trigger_type?: string | null;
+          read?: boolean;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
       claim_appeals: {
         Row: {
           id: string;
@@ -661,6 +703,8 @@ export type TriggerEvent = Database["public"]["Tables"]["trigger_events"]["Row"]
 export type IncidentRun = Database["public"]["Tables"]["incident_runs"]["Row"];
 export type ClaimAppeal = Database["public"]["Tables"]["claim_appeals"]["Row"];
 export type AuditLog = Database["public"]["Tables"]["audit_log"]["Row"];
+
+export type Notification = Database["public"]["Tables"]["notifications"]["Row"];
 
 // View types
 export type DashboardKPIs = Database["public"]["Views"]["v_dashboard_kpis"]["Row"];

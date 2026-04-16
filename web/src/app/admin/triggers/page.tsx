@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Zap,
   CloudRain,
@@ -16,6 +17,9 @@ import {
   RotateCw,
   Activity,
   Sparkles,
+  Bell,
+  IndianRupee,
+  FlameKindling,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -171,6 +175,7 @@ export default function AdminTriggers() {
     triggerValue: string;
     thresholdValue: string;
     durationMs: number;
+    notificationsSent: number;
   } | null>(null);
 
   const loadRecentIncidents = useCallback(async () => {
@@ -251,6 +256,7 @@ export default function AdminTriggers() {
         triggerValue: measuredLabel,
         thresholdValue: thresholdLabel,
         durationMs: result.duration_ms,
+        notificationsSent: result.notifications_sent ?? 0,
       });
 
       const recentRow: RecentTriggerRow = {
@@ -532,37 +538,99 @@ export default function AdminTriggers() {
             </div>
           )}
 
+          <AnimatePresence>
           {simResult && (
-            <div className="mt-4 p-4 rounded-lg bg-emerald-50 border border-emerald-200">
-              <div className="flex items-center gap-2 mb-2">
-                <CheckCircle className="w-4 h-4 text-emerald-600" />
-                <span className="text-sm font-medium text-emerald-600">
-                  {simResult.mode === "fire" ? "Trigger Fired" : "Simulation Complete"}
+            <motion.div
+              key={simResult.mode + simResult.workers}
+              initial={{ opacity: 0, y: 12, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ type: "spring", stiffness: 280, damping: 24 }}
+              className={`mt-4 p-5 rounded-xl border shadow-sm ${
+                simResult.mode === "fire"
+                  ? "bg-gradient-to-br from-emerald-50 to-teal-50 border-emerald-200"
+                  : "bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-200"
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-4">
+                <div className={`p-1.5 rounded-lg ${simResult.mode === "fire" ? "bg-emerald-100" : "bg-blue-100"}`}>
+                  {simResult.mode === "fire" ? (
+                    <FlameKindling className="w-4 h-4 text-emerald-700" />
+                  ) : (
+                    <CheckCircle className="w-4 h-4 text-blue-700" />
+                  )}
+                </div>
+                <span className={`text-sm font-semibold ${simResult.mode === "fire" ? "text-emerald-700" : "text-blue-700"}`}>
+                  {simResult.mode === "fire" ? "🔥 Trigger Fired — Live Payouts Initiating" : "✅ Simulation Complete — No Real Payouts"}
                 </span>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                <div>
-                  <p className="text-xs text-muted-foreground">Workers Affected</p>
-                  <p className="text-lg font-bold">{simResult.workers}</p>
+                <div className="bg-white/60 rounded-xl p-3 border border-white">
+                  <div className="flex items-center gap-1 text-xs text-muted-foreground mb-1">
+                    <Users className="w-3 h-3" /> Workers Affected
+                  </div>
+                  <motion.p
+                    key={simResult.workers}
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: 0.1 }}
+                    className="text-2xl font-bold text-slate-900"
+                  >
+                    {simResult.workers.toLocaleString("en-IN")}
+                  </motion.p>
                 </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Estimated Payout</p>
-                  <p className="text-lg font-bold">{formatCurrency(simResult.payout)}</p>
+                <div className="bg-white/60 rounded-xl p-3 border border-white">
+                  <div className="flex items-center gap-1 text-xs text-muted-foreground mb-1">
+                    <IndianRupee className="w-3 h-3" /> Est. Payout
+                  </div>
+                  <motion.p
+                    key={simResult.payout}
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: 0.2 }}
+                    className="text-2xl font-bold text-emerald-700"
+                  >
+                    {formatCurrency(simResult.payout)}
+                  </motion.p>
                 </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Measured</p>
-                  <p className="text-sm font-semibold">{simResult.triggerValue}</p>
+                <div className="bg-white/60 rounded-xl p-3 border border-white">
+                  <div className="flex items-center gap-1 text-xs text-muted-foreground mb-1">
+                    <Bell className="w-3 h-3" /> Notified Workers
+                  </div>
+                  <motion.p
+                    key={simResult.notificationsSent}
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: 0.3 }}
+                    className={`text-2xl font-bold ${
+                      simResult.mode === "fire" ? "text-purple-700" : "text-slate-400"
+                    }`}
+                  >
+                    {simResult.mode === "fire" ? simResult.notificationsSent.toLocaleString("en-IN") : "—"}
+                  </motion.p>
                 </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Latency</p>
-                  <p className="text-sm font-semibold">{simResult.durationMs} ms</p>
+                <div className="bg-white/60 rounded-xl p-3 border border-white">
+                  <div className="flex items-center gap-1 text-xs text-muted-foreground mb-1">
+                    <Activity className="w-3 h-3" /> Latency
+                  </div>
+                  <motion.p
+                    key={simResult.durationMs}
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: 0.4 }}
+                    className="text-2xl font-bold text-slate-700"
+                  >
+                    {simResult.durationMs} ms
+                  </motion.p>
                 </div>
               </div>
-              <p className="mt-2 text-xs text-muted-foreground">
-                Threshold: {simResult.thresholdValue}
+              <p className="mt-3 text-xs text-muted-foreground">
+                Measured: {simResult.triggerValue} · Threshold: {simResult.thresholdValue}
+                {simResult.mode === "fire" && " · Notifications sent to all active workers in zone"}
               </p>
-            </div>
+            </motion.div>
           )}
+          </AnimatePresence>
         </CardContent>
       </Card>
 

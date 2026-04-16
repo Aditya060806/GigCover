@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { motion } from "framer-motion";
 import {
   Activity,
   ShieldAlert,
@@ -12,6 +13,8 @@ import {
   RotateCw,
   Sparkles,
   AlertCircle,
+  MapPin,
+  Navigation,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -597,6 +600,48 @@ export default function AdminFraud() {
                   </div>
                 </div>
 
+                {/* GPS Spoofing Chip */}
+                {(() => {
+                  const gpsFeature = selectedAlert.features.find(
+                    (f) => f.name.toLowerCase().includes("gps")
+                  );
+                  if (!gpsFeature) return null;
+                  const isSpoofed = gpsFeature.contribution > 0.15;
+                  return (
+                    <motion.div
+                      initial={{ opacity: 0, x: -8 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      className={`flex items-center gap-3 rounded-xl p-3 border ${
+                        isSpoofed
+                          ? "bg-red-50 border-red-200"
+                          : "bg-emerald-50 border-emerald-200"
+                      }`}
+                    >
+                      <div className={`p-2 rounded-lg ${
+                        isSpoofed ? "bg-red-100" : "bg-emerald-100"
+                      }`}>
+                        <Navigation className={`w-4 h-4 ${
+                          isSpoofed ? "text-red-600" : "text-emerald-600"
+                        }`} />
+                      </div>
+                      <div className="flex-1">
+                        <p className={`text-xs font-semibold ${
+                          isSpoofed ? "text-red-700" : "text-emerald-700"
+                        }`}>
+                          GPS Signal: {isSpoofed ? "🚨 Spoofing Detected" : "✅ Location Authentic"}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">
+                          Deviation contribution: {(gpsFeature.contribution * 100).toFixed(0)}%
+                          {isSpoofed ? " — Location inconsistent with weather zone" : " — Consistent with reported zone"}
+                        </p>
+                      </div>
+                      <Badge variant={isSpoofed ? "destructive" : "success"} className="text-[10px]">
+                        {isSpoofed ? "High Risk" : "Verified"}
+                      </Badge>
+                    </motion.div>
+                  );
+                })()}
+
                 {/* SHAP Feature Bars */}
                 <div>
                   <p className="text-sm font-medium mb-3 flex items-center gap-2">
@@ -604,44 +649,57 @@ export default function AdminFraud() {
                     Feature Contributions (SHAP Values)
                   </p>
                   <div className="space-y-3">
-                    {selectedAlert.features.map((feature) => {
+                    {selectedAlert.features.map((feature, idx) => {
                       const maxVal = 0.5;
                       const width = Math.min(Math.abs(feature.contribution) / maxVal, 1) * 100;
                       const isPositive = feature.direction === "up";
+                      const isGPS = feature.name.toLowerCase().includes("gps");
                       return (
-                        <div key={feature.name}>
+                        <motion.div
+                          key={feature.name}
+                          initial={{ opacity: 0, x: -10 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: idx * 0.06 }}
+                        >
                           <div className="flex items-center justify-between text-xs mb-1">
-                            <span className="text-muted-foreground">{feature.name}</span>
-                            <span
-                              className={
-                              isPositive ? "text-red-600" : "text-emerald-600"
-                              }
-                            >
-                              {isPositive ? "+" : ""}
-                              {feature.contribution.toFixed(2)}
+                            <span className={`text-muted-foreground flex items-center gap-1.5 ${
+                              isGPS ? "text-orange-600 font-medium" : ""
+                            }`}>
+                              {isGPS && <MapPin className="w-3 h-3" />}
+                              {feature.name}
+                            </span>
+                            <span className={isPositive ? "text-red-600" : "text-emerald-600"}>
+                              {isPositive ? "+" : ""}{feature.contribution.toFixed(2)}
                             </span>
                           </div>
                           <div className="h-5 flex items-center">
                             <div className="w-full flex items-center">
-                              {/* Center line */}
                               <div className="relative w-full h-2">
                                 <div className="absolute inset-0 bg-slate-100 rounded-full" />
                                 {isPositive ? (
-                                  <div
-                                    className="absolute left-1/2 top-0 h-full bg-gradient-to-r from-red-500/80 to-red-400 rounded-r-full"
-                                    style={{ width: `${width / 2}%` }}
+                                  <motion.div
+                                    initial={{ width: 0 }}
+                                    animate={{ width: `${width / 2}%` }}
+                                    transition={{ delay: 0.1 + idx * 0.06, duration: 0.4 }}
+                                    className={`absolute left-1/2 top-0 h-full rounded-r-full ${
+                                      isGPS
+                                        ? "bg-gradient-to-r from-orange-500/80 to-orange-400"
+                                        : "bg-gradient-to-r from-red-500/80 to-red-400"
+                                    }`}
                                   />
                                 ) : (
-                                  <div
+                                  <motion.div
+                                    initial={{ width: 0 }}
+                                    animate={{ width: `${width / 2}%` }}
+                                    transition={{ delay: 0.1 + idx * 0.06, duration: 0.4 }}
                                     className="absolute right-1/2 top-0 h-full bg-gradient-to-l from-emerald-500/80 to-emerald-400 rounded-l-full"
-                                    style={{ width: `${width / 2}%` }}
                                   />
                                 )}
                                 <div className="absolute left-1/2 top-0 w-px h-full bg-slate-300" />
                               </div>
                             </div>
                           </div>
-                        </div>
+                        </motion.div>
                       );
                     })}
                   </div>

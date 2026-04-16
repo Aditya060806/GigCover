@@ -809,6 +809,76 @@ def _fallback_shap(req, score):
     ]
 
 
+def _check_duplicate_claim(worker_id: str, trigger_type: str, window_minutes: int = 60) -> int:
+    """Return count of claims by this worker for same trigger within window_minutes."""
+    try:
+        since = (datetime.utcnow() - timedelta(minutes=window_minutes)).isoformat()
+        rows = _sb_get(
+            "claims",
+            params={
+                "select": "id",
+                "worker_id": f"eq.{worker_id}",
+                "trigger_type": f"eq.{trigger_type}",
+                "created_at": f"gte.{since}",
+                "limit": "10",
+            },
+        )
+        return len(rows)
+    except Exception:
+        return 0
+
+
+def _write_notifications_for_trigger(
+    city: str, zone: str, trigger_type: str, payout_amount: float, workers_affected: int
+) -> int:
+    """Fan-out notifications to all active workers in a zone when a trigger fires."""
+    try:
+        worker_rows = _sb_get(
+            "gig_workers",
+            params={
+                "select": "id,name",
+                "city": f"eq.{city}",
+                "zone": f"eq.{zone}",
+                "status": "eq.active",
+                "limit": "500",
+            },
+        )
+        if not worker_rows:
+            return 0
+
+        trigger_labels = {
+            "heavy_rain": "Heavy Rain Alert 🌧️",
+            "flood": "Flood Alert 🌊",
+            "heatwave": "Heatwave Alert 🔥",
+            "aqi": "Hazardous AQI Alert 😷",
+            "storm": "Severe Storm Alert 🌪️",
+            "curfew": "Curfew / Disruption Alert 🚨",
+        }
+        title = trigger_labels.get(trigger_type, "Weather Alert")
+        body = f"A parametric trigger fired in {zone}, {city}. ₹{int(payout_amount):,} payout is being processed to your wallet."
+
+        notif_rows = [
+            {
+                "worker_id": w["id"],
+                "type": "trigger_fired",
+                "title": title,
+                "body": body,
+                "city": city,
+                "zone": zone,
+                "amount": round(payout_amount, 2),
+                "trigger_type": trigger_type,
+                "read": False,
+                "created_at": datetime.utcnow().isoformat(),
+            }
+            for w in worker_rows
+        ]
+        _sb_insert("notifications", notif_rows)
+        return len(notif_rows)
+    except Exception as exc:
+        print(f"⚠️ Notification fan-out failed: {exc}")
+        return 0
+
+
 def _simulate_trigger_payload(city: str, zone: str, trigger_type: str) -> Dict[str, Any]:
     threshold = TRIGGER_THRESHOLDS.get(trigger_type)
     if not threshold:
@@ -1146,10 +1216,21 @@ def run_incident(req: IncidentRunRequest):
             },
         )
 
+    notifications_sent = 0
+    if mode == "fire" and _env("SUPABASE_URL") and _env("SUPABASE_SERVICE_ROLE_KEY"):
+        notifications_sent = _write_notifications_for_trigger(
+            req.city,
+            req.zone,
+            req.trigger_type,
+            payload["avg_payout_per_worker"],
+            payload["workers_affected"],
+        )
+
     payload["incident_id"] = incident_run_id
     payload["trigger_event_id"] = trigger_event_id
     payload["duration_ms"] = duration_ms
     payload["mode"] = mode
+    payload["notifications_sent"] = notifications_sent
     return payload
 
 

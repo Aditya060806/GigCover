@@ -113,6 +113,7 @@ export interface IncidentRunResponse {
   measured_value: number;
   duration_ms: number;
   timestamp: string;
+  notifications_sent?: number;
 }
 
 export interface FraudDecisionRequest {

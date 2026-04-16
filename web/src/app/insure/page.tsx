@@ -39,6 +39,8 @@ const insureSteps = [
 export default function InsurePage() {
   const router = useRouter();
   const [step, setStep] = useState(0);
+  const [direction, setDirection] = useState(1);
+  const goTo = (n: number) => { setDirection(n > step ? 1 : -1); setStep(n); };
   const [isCalculating, setIsCalculating] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState("razorpay");
@@ -158,17 +160,18 @@ export default function InsurePage() {
   };
 
   return (
-    <div className="min-h-screen p-4 lg:p-8 relative bg-slate-50">
-      <div className="absolute inset-0 grid-pattern pointer-events-none opacity-40" />
+    <div className="min-h-screen p-4 lg:p-8 relative gradient-mesh">
+      <div className="absolute inset-0 grid-pattern pointer-events-none opacity-20" />
+      <div className="absolute -top-32 -left-32 w-[500px] h-[500px] rounded-full bg-teal-400/8 blur-3xl pointer-events-none" />
 
       <div className="max-w-3xl mx-auto">
         {/* Header */}
         <div className="text-center mb-8">
           <Link href="/" className="inline-flex items-center gap-2 mb-4">
-            <div className="w-9 h-9 rounded-lg bg-teal-600 flex items-center justify-center">
-              <Shield className="w-4.5 h-4.5 text-white" />
+            <div className="w-9 h-9 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-500 flex items-center justify-center shadow-md">
+              <Shield className="w-4 h-4 text-white" />
             </div>
-            <span className="text-xl font-bold text-teal-600">GigCover</span>
+            <span className="text-xl font-bold text-foreground">GigCover</span>
           </Link>
           <h1 className="text-2xl font-bold mb-1">Get Covered in Minutes</h1>
           <p className="text-sm text-muted-foreground">
@@ -176,38 +179,37 @@ export default function InsurePage() {
           </p>
         </div>
 
-        {/* Step Indicator */}
+        {/* Segmented Progress Bar */}
         {step < 4 && (
-          <div className="flex items-center justify-center gap-2 mb-8">
-            {insureSteps.map((s, i) => (
-              <div key={i} className="flex items-center">
-                <div className="flex flex-col items-center gap-1">
-                  <div
-                    className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
-                      i < step
-                        ? "bg-emerald-100 text-emerald-600 border border-emerald-200"
-                        : i === step
-                        ? "bg-teal-600 text-white"
-                        : "bg-white text-muted-foreground border border-slate-200"
-                    }`}
-                  >
-                    {i < step ? <CheckCircle className="w-4 h-4" /> : <s.icon className="w-4 h-4" />}
-                  </div>
-                  <span className="text-[10px] text-muted-foreground">{s.label}</span>
+          <div className="mb-8">
+            <div className="flex gap-1.5 mb-2">
+              {insureSteps.map((_, i) => (
+                <div key={i} className="flex-1 h-1.5 rounded-full bg-slate-200 overflow-hidden">
+                  <motion.div
+                    initial={{ width: 0 }}
+                    animate={{ width: i <= step ? "100%" : "0%" }}
+                    transition={{ duration: 0.4, ease: "easeOut" }}
+                    className={i < step ? "h-full bg-emerald-400" : i === step ? "h-full bg-teal-500" : "h-full bg-transparent"}
+                  />
                 </div>
-                {i < insureSteps.length - 1 && (
-                  <div className={`w-16 h-0.5 mx-2 rounded-full mb-5 ${i < step ? "bg-emerald-200" : "bg-slate-200"}`} />
-                )}
-              </div>
-            ))}
+              ))}
+            </div>
+            <div className="flex justify-between">
+              {insureSteps.map((s, i) => (
+                <div key={i} className="flex items-center gap-1">
+                  <s.icon className={`w-3 h-3 ${i <= step ? "text-teal-600" : "text-slate-300"}`} />
+                  <span className={`text-[10px] font-medium ${i === step ? "text-teal-700" : i < step ? "text-emerald-600" : "text-slate-400"}`}>{s.label}</span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
-        <AnimatePresence mode="wait">
+        <AnimatePresence mode="wait" custom={direction}>
           {/* Step 0: Platform Selection */}
           {step === 0 && (
-            <motion.div key="s0" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
-              <Card className="border-slate-200 shadow-lg">
+            <motion.div key="s0" custom={direction} initial={{ opacity: 0, x: direction * 40 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: direction * -40 }} transition={{ duration: 0.25, ease: "easeOut" }}>
+              <Card className="shadow-xl border-0 glass-card">
                 <CardHeader>
                   <CardTitle>Which platform do you deliver for?</CardTitle>
                 </CardHeader>
@@ -231,7 +233,7 @@ export default function InsurePage() {
                   <div className="flex justify-end mt-6">
                     <Button
                       variant="default"
-                      onClick={() => setStep(1)}
+                      onClick={() => goTo(1)}
                       disabled={!formData.platform}
                     >
                       Continue <ArrowRight className="w-4 h-4 ml-1" />
@@ -244,8 +246,8 @@ export default function InsurePage() {
 
           {/* Step 1: Zone Selection */}
           {step === 1 && (
-            <motion.div key="s1" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
-              <Card className="border-slate-200 shadow-lg">
+            <motion.div key="s1" custom={direction} initial={{ opacity: 0, x: direction * 40 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: direction * -40 }} transition={{ duration: 0.25, ease: "easeOut" }}>
+              <Card className="shadow-xl border-0 glass-card">
                 <CardHeader>
                   <CardTitle>Select your delivery zone</CardTitle>
                 </CardHeader>
@@ -321,7 +323,7 @@ export default function InsurePage() {
                   )}
 
                   <div className="flex justify-between mt-4">
-                    <Button variant="ghost" onClick={() => setStep(0)}>
+                    <Button variant="ghost" onClick={() => goTo(0)}>
                       <ArrowLeft className="w-4 h-4 mr-1" /> Back
                     </Button>
                     <Button
@@ -379,8 +381,8 @@ export default function InsurePage() {
 
           {/* Step 2: AI Premium Result */}
           {step === 2 && premiumData && (
-            <motion.div key="s2" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
-              <Card className="border-slate-200 shadow-lg">
+            <motion.div key="s2" custom={direction} initial={{ opacity: 0, x: direction * 40 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: direction * -40 }} transition={{ duration: 0.25, ease: "easeOut" }}>
+              <Card className="shadow-xl border-0 glass-card">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <Brain className="w-5 h-5 text-teal-600" />
@@ -484,10 +486,10 @@ export default function InsurePage() {
                   </div>
 
                   <div className="flex justify-between">
-                    <Button variant="ghost" onClick={() => setStep(1)}>
+                    <Button variant="ghost" onClick={() => goTo(1)}>
                       <ArrowLeft className="w-4 h-4 mr-1" /> Recalculate
                     </Button>
-                    <Button variant="default" onClick={() => setStep(3)}>
+                    <Button variant="default" onClick={() => goTo(3)}>
                       Proceed to Pay <ArrowRight className="w-4 h-4 ml-1" />
                     </Button>
                   </div>
@@ -498,8 +500,8 @@ export default function InsurePage() {
 
           {/* Step 3: Payment */}
           {step === 3 && premiumData && (
-            <motion.div key="s3" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
-              <Card className="border-slate-200 shadow-lg">
+            <motion.div key="s3" custom={direction} initial={{ opacity: 0, x: direction * 40 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: direction * -40 }} transition={{ duration: 0.25, ease: "easeOut" }}>
+              <Card className="shadow-xl border-0 glass-card">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <CreditCard className="w-5 h-5 text-teal-600" />
@@ -577,7 +579,7 @@ export default function InsurePage() {
                   </div>
 
                   <div className="flex justify-between">
-                    <Button variant="ghost" onClick={() => setStep(2)}>
+                    <Button variant="ghost" onClick={() => goTo(2)}>
                       <ArrowLeft className="w-4 h-4 mr-1" /> Back
                     </Button>
                     <Button
@@ -606,12 +608,28 @@ export default function InsurePage() {
 
           {/* Step 4: Success */}
           {step === 4 && (
-            <motion.div key="s4" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.5 }}>
-              <Card className="border-emerald-200 shadow-lg">
-                <CardContent className="p-8 text-center">
-                  <div className="w-20 h-20 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-6">
-                    <CheckCircle className="w-10 h-10 text-emerald-600" />
-                  </div>
+            <motion.div key="s4" initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.5, ease: "backOut" }}>
+              <Card className="border-0 shadow-2xl glass-card overflow-hidden relative">
+                {/* Confetti orbs */}
+                {["#5eead4","#34d399","#fbbf24","#60a5fa","#a78bfa"].map((c, i) => (
+                  <motion.div
+                    key={i}
+                    className="absolute rounded-full pointer-events-none"
+                    style={{ background: c, width: 12 + i * 6, height: 12 + i * 6, top: `${10 + i * 8}%`, left: `${8 + i * 18}%`, opacity: 0.6 }}
+                    initial={{ y: 0, opacity: 0 }}
+                    animate={{ y: [-20, 40, -10], opacity: [0, 0.7, 0] }}
+                    transition={{ duration: 1.2, delay: i * 0.12, ease: "easeOut" }}
+                  />
+                ))}
+                <CardContent className="p-8 text-center relative z-10">
+                  <motion.div
+                    initial={{ scale: 0.5, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ type: "spring", stiffness: 260, damping: 16, delay: 0.1 }}
+                    className="w-20 h-20 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center mx-auto mb-6 shadow-lg"
+                  >
+                    <CheckCircle className="w-10 h-10 text-white" />
+                  </motion.div>
                   <h2 className="text-2xl font-bold mb-2">You&apos;re Covered! 🎉</h2>
                   <p className="text-muted-foreground mb-6">
                     Your {selectedPlan?.name} plan is now active for {formData.zone}, {formData.city}

@@ -38,6 +38,10 @@ const steps = [
 export default function RegisterPage() {
   const router = useRouter();
   const [step, setStep] = useState(0);
+  const [direction, setDirection] = useState(1);
+
+  const goNext = () => { setDirection(1); setStep((s) => s + 1); };
+  const goBack = () => { setDirection(-1); setStep((s) => s - 1); };
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +57,13 @@ export default function RegisterPage() {
   });
 
   const selectedCity = CITIES.find((c) => c.name === formData.city);
+
+  const canContinue = [
+    formData.name.trim().length > 1 && formData.phone.trim().length === 10,
+    Boolean(formData.platform),
+    Boolean(formData.city && formData.zone),
+    true,
+  ][step] ?? false;
 
   const update = (field: string, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -101,7 +112,7 @@ export default function RegisterPage() {
         {/* Logo */}
         <div className="text-center mb-6">
           <Link href="/" className="inline-flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-xl bg-teal-600 flex items-center justify-center">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-500 flex items-center justify-center shadow-md">
               <Shield className="w-5 h-5 text-white" />
             </div>
             <span className="text-2xl font-bold text-foreground">GigCover</span>
@@ -111,46 +122,42 @@ export default function RegisterPage() {
           </p>
         </div>
 
-        {/* Step Indicator */}
-        <div className="flex items-center justify-center gap-2 mb-6">
-          {steps.map((s, i) => (
-            <div key={i} className="flex items-center">
-              <div
-                className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${
-                  i < step
-                    ? "bg-emerald-100 text-emerald-600 border border-emerald-200"
-                    : i === step
-                    ? "bg-teal-600 text-white"
-                    : "bg-white text-muted-foreground border border-slate-200"
-                }`}
-              >
-                {i < step ? (
-                  <CheckCircle className="w-4 h-4" />
-                ) : (
-                  <s.icon className="w-3.5 h-3.5" />
-                )}
-              </div>
-              {i < steps.length - 1 && (
-                <div
-                  className={`w-12 h-0.5 mx-1 rounded-full ${
-                    i < step ? "bg-emerald-200" : "bg-slate-200"
-                  }`}
+        {/* Segmented Progress Bar */}
+        <div className="mb-6">
+          <div className="flex gap-1.5 mb-2">
+            {steps.map((_, i) => (
+              <div key={i} className="flex-1 h-1.5 rounded-full bg-slate-200 overflow-hidden">
+                <motion.div
+                  initial={{ width: 0 }}
+                  animate={{ width: i <= step ? "100%" : "0%" }}
+                  transition={{ duration: 0.4, ease: "easeOut" }}
+                  className={i < step ? "h-full bg-emerald-400" : i === step ? "h-full bg-teal-500" : "h-full bg-transparent"}
                 />
-              )}
-            </div>
-          ))}
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-between">
+            {steps.map((s, i) => (
+              <div key={i} className="flex items-center gap-1">
+                <s.icon className={`w-3 h-3 ${i <= step ? "text-teal-600" : "text-slate-300"}`} />
+                <span className={`text-[10px] font-medium ${i === step ? "text-teal-700" : i < step ? "text-emerald-600" : "text-slate-400"}`}>{s.label}</span>
+              </div>
+            ))}
+          </div>
         </div>
 
-        <Card className="shadow-lg border-slate-200">
+        <Card className="shadow-xl border-0 glass-card">
           <CardContent className="p-6">
-            <AnimatePresence mode="wait">
+            <AnimatePresence mode="wait" custom={direction}>
               {/* Step 0: Personal */}
               {step === 0 && (
                 <motion.div
                   key="personal"
-                  initial={{ opacity: 0, x: 20 }}
+                  custom={direction}
+                  initial={{ opacity: 0, x: direction * 32 }}
                   animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -20 }}
+                  exit={{ opacity: 0, x: direction * -32 }}
+                  transition={{ duration: 0.25, ease: "easeOut" }}
                   className="space-y-4"
                 >
                   <h3 className="text-lg font-semibold text-foreground mb-1">Personal Details</h3>
@@ -228,9 +235,11 @@ export default function RegisterPage() {
               {step === 1 && (
                 <motion.div
                   key="platform"
-                  initial={{ opacity: 0, x: 20 }}
+                  custom={direction}
+                  initial={{ opacity: 0, x: direction * 32 }}
                   animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -20 }}
+                  exit={{ opacity: 0, x: direction * -32 }}
+                  transition={{ duration: 0.25, ease: "easeOut" }}
                   className="space-y-4"
                 >
                   <h3 className="text-lg font-semibold text-foreground mb-1">Select Platform</h3>
@@ -264,9 +273,11 @@ export default function RegisterPage() {
               {step === 2 && (
                 <motion.div
                   key="location"
-                  initial={{ opacity: 0, x: 20 }}
+                  custom={direction}
+                  initial={{ opacity: 0, x: direction * 32 }}
                   animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -20 }}
+                  exit={{ opacity: 0, x: direction * -32 }}
+                  transition={{ duration: 0.25, ease: "easeOut" }}
                   className="space-y-4"
                 >
                   <h3 className="text-lg font-semibold text-foreground mb-1">Your Location</h3>
@@ -329,9 +340,11 @@ export default function RegisterPage() {
               {step === 3 && (
                 <motion.div
                   key="plan"
-                  initial={{ opacity: 0, x: 20 }}
+                  custom={direction}
+                  initial={{ opacity: 0, x: direction * 32 }}
                   animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -20 }}
+                  exit={{ opacity: 0, x: direction * -32 }}
+                  transition={{ duration: 0.25, ease: "easeOut" }}
                   className="space-y-4"
                 >
                   <h3 className="text-lg font-semibold text-foreground mb-1">Choose Your Plan</h3>
@@ -397,7 +410,7 @@ export default function RegisterPage() {
             {/* Navigation */}
             <div className="flex justify-between mt-6 pt-4 border-t border-slate-100">
               {step > 0 ? (
-                <Button variant="ghost" size="sm" onClick={() => setStep(step - 1)}>
+                <Button variant="ghost" size="sm" onClick={goBack}>
                   <ArrowLeft className="w-4 h-4 mr-1" />
                   Back
                 </Button>
@@ -406,7 +419,7 @@ export default function RegisterPage() {
               )}
 
               {step < 3 ? (
-                <Button size="sm" onClick={() => setStep(step + 1)}>
+                <Button size="sm" onClick={goNext} disabled={!canContinue}>
                   Continue
                   <ArrowRight className="w-4 h-4 ml-1" />
                 </Button>
@@ -437,6 +450,23 @@ export default function RegisterPage() {
                 Sign in
               </Link>
             </p>
+
+            <div className="flex items-center justify-center gap-6 mt-4 pt-4 border-t border-slate-100">
+              <div className="text-center">
+                <p className="text-sm font-bold text-foreground">15,000+</p>
+                <p className="text-[10px] text-muted-foreground">Workers covered</p>
+              </div>
+              <div className="w-px h-8 bg-slate-200" />
+              <div className="text-center">
+                <p className="text-sm font-bold text-foreground">₹4.5Cr+</p>
+                <p className="text-[10px] text-muted-foreground">Paid out</p>
+              </div>
+              <div className="w-px h-8 bg-slate-200" />
+              <div className="text-center">
+                <p className="text-sm font-bold text-foreground">&lt; 2 min</p>
+                <p className="text-[10px] text-muted-foreground">Avg payout time</p>
+              </div>
+            </div>
           </CardContent>
         </Card>
       </motion.div>

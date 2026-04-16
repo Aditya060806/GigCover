@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Users,
   FileText,
@@ -14,6 +15,7 @@ import {
   RotateCw,
   Clock3,
   Loader2,
+  Radio,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -118,6 +120,15 @@ export default function AdminOverview() {
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const realtimeRefreshTimerRef = useRef<number | null>(null);
+  const [liveEvents, setLiveEvents] = useState<{
+    id: string;
+    kind: "trigger" | "claim" | "fraud";
+    label: string;
+    city: string;
+    zone: string;
+    amount?: number;
+    ts: string;
+  }[]>([]);
 
   useEffect(() => {
     setChartsReady(true);
@@ -217,13 +228,31 @@ export default function AdminOverview() {
     return () => window.clearInterval(intervalId);
   }, [loadOverview]);
 
+  type LiveEvent = typeof liveEvents[0];
+  const pushLiveEvent = useCallback((event: LiveEvent) => {
+    setLiveEvents((prev) => [event, ...prev].slice(0, 12));
+  }, []);
+
   useEffect(() => {
     const channel = supabase
       .channel("admin-overview-live")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "claims" },
-        scheduleRealtimeRefresh
+        (payload) => {
+          const row = payload.new as { id: string; trigger_type?: string; city?: string; zone?: string; amount?: number; fraud_score?: number; created_at?: string };
+          const isFraud = (row.fraud_score ?? 0) > 0.5;
+          pushLiveEvent({
+            id: row.id ?? Date.now().toString(),
+            kind: isFraud ? "fraud" : "claim",
+            label: isFraud ? `Fraud detected — ${(row.fraud_score ?? 0 * 100).toFixed(0)}% risk` : `${TRIGGER_LABELS[row.trigger_type ?? ""] ?? "Trigger"} claim`,
+            city: row.city ?? "",
+            zone: row.zone ?? "",
+            amount: Number(row.amount ?? 0),
+            ts: row.created_at ?? new Date().toISOString(),
+          });
+          scheduleRealtimeRefresh();
+        }
       )
       .on(
         "postgres_changes",
@@ -233,12 +262,35 @@ export default function AdminOverview() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "fraud_logs" },
-        scheduleRealtimeRefresh
+        (payload) => {
+          const row = payload.new as { id: string; city?: string; zone?: string; detected_at?: string };
+          pushLiveEvent({
+            id: row.id ?? Date.now().toString(),
+            kind: "fraud",
+            label: "ML flagged suspicious claim",
+            city: row.city ?? "",
+            zone: row.zone ?? "",
+            ts: row.detected_at ?? new Date().toISOString(),
+          });
+          scheduleRealtimeRefresh();
+        }
       )
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "trigger_events" },
-        scheduleRealtimeRefresh
+        { event: "INSERT", schema: "public", table: "trigger_events" },
+        (payload) => {
+          const row = payload.new as { id: string; trigger_type?: string; city?: string; zone?: string; total_payout?: number; fired_at?: string };
+          pushLiveEvent({
+            id: row.id ?? Date.now().toString(),
+            kind: "trigger",
+            label: `${TRIGGER_LABELS[row.trigger_type ?? ""] ?? "Trigger"} FIRED`,
+            city: row.city ?? "",
+            zone: row.zone ?? "",
+            amount: Number(row.total_payout ?? 0),
+            ts: row.fired_at ?? new Date().toISOString(),
+          });
+          scheduleRealtimeRefresh();
+        }
       )
       .subscribe();
 
@@ -249,7 +301,7 @@ export default function AdminOverview() {
       }
       void supabase.removeChannel(channel);
     };
-  }, [scheduleRealtimeRefresh]);
+  }, [scheduleRealtimeRefresh, pushLiveEvent]);
 
   const stats = [
     {
@@ -617,6 +669,59 @@ export default function AdminOverview() {
             ))}
           </CardContent>
         </Card>
+
+        {/* Realtime Event Stream */}
+        {liveEvents.length > 0 && (
+          <Card className="border-purple-200/60 bg-gradient-to-b from-purple-50/30 to-white">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Radio className="w-4 h-4 text-purple-600 animate-pulse" />
+                Live Event Stream
+                <Badge variant="secondary" className="text-[10px] ml-auto">{liveEvents.length} events</Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2 max-h-72 overflow-y-auto">
+                <AnimatePresence initial={false}>
+                  {liveEvents.map((event) => (
+                    <motion.div
+                      key={event.id}
+                      initial={{ opacity: 0, x: -16, height: 0 }}
+                      animate={{ opacity: 1, x: 0, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ type: "spring", stiffness: 300, damping: 28 }}
+                      className={`flex items-center gap-3 rounded-lg border px-3 py-2 text-sm ${
+                        event.kind === "trigger"
+                          ? "bg-amber-50 border-amber-200"
+                          : event.kind === "fraud"
+                          ? "bg-red-50 border-red-200"
+                          : "bg-emerald-50 border-emerald-200"
+                      }`}
+                    >
+                      <span className="text-base">
+                        {event.kind === "trigger" ? "⚡" : event.kind === "fraud" ? "🚨" : "✅"}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-xs truncate">{event.label}</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {event.city}{event.zone ? ` · ${event.zone}` : ""}
+                        </p>
+                      </div>
+                      {event.amount ? (
+                        <span className="text-xs font-semibold text-emerald-700 flex-shrink-0">
+                          {formatCurrency(event.amount)}
+                        </span>
+                      ) : null}
+                      <span className="text-[10px] text-muted-foreground flex-shrink-0">
+                        {new Date(event.ts).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                      </span>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Top Trigger Types */}
         <Card>
